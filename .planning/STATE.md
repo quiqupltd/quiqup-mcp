@@ -9,10 +9,10 @@
 
 ## Current Position
 
-- **current_phase:** 5 (next — Labels, Slips & PDFs)
-- **current_plan:** 05-01 (next — pending planning)
-- **status:** Phase 4 COMPLETE (5/5 plans shipped — all 20 destructive-gated mutation tools live + 4 family evals + 8 new STATIC scorers locking D-01..D-06 + T-04-13/14/26..31 at CI). Phases 1-4 all done.
-- **progress:** Phase 4 closed 2026-05-21 with plan 04-05 (Wave 5 eval coverage). 4 new Langfuse evals (batch-transitions, single-order-mutations, order-creation, missions) cover all 20 Phase-4 tools; EVAL_GATE=1 now blocks on Phase-4 family regressions at CI. 718 passed | 3 skipped; no test regressions.
+- **current_phase:** 5 (planned — Labels, Slips & PDFs; ready to execute)
+- **current_plan:** 05-01 (next — execute Wave 1)
+- **status:** Phase 5 PLANNED (4/4 plans created 2026-05-22, verified by gsd-plan-checker). Phases 1-4 all shipped (20 plans / 93 tools / 13 service-host families with Langfuse evals).
+- **progress:** Phase 5 planning complete 2026-05-22 — 4 plans in 4 sequential waves: 05-01 stands up the new Quiqup-GraphQL-host REST client (own QuiqupGraphqlHostError) + download_pending_labels (MISS-03); 05-02 reuses the client for download_return_label (MISS-05); 05-03 extends PlatformApiClient with backwards-compat extraHeaders + download_slip (MISS-06, slipType z.enum-pinned); 05-04 ships the family Langfuse eval + 5 new STATIC scorers (binary-envelope-contract-present, auth-isolation-quiqup-graphql-host, slip-type-enum-pin, no-guardrails-on-read-tools, quiqup-graphql-host-error-class-uniqueness) and the eval:labels-slips-pdfs CI job. Every Quiqup-host tool plan carries a blocking checkpoint:human-verify task producing a CALL-LOG-*.md per AGENTS.md.
 
 ```
 [█████████           ] 40% (Phases 1-4 of 10 complete)

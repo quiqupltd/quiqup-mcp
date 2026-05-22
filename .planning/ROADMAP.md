@@ -115,7 +115,12 @@ Plans:
   2. An agent can download a return-order label PDF (base64) via `download_return_label`.
   3. An agent can download a picking-list / packing-list slip PDF (base64) via `download_slip` with the `slipType` parameter validated against the allowed enum.
   4. All three tools return a uniform `{ contentType, base64, filenameHint }` payload shape so downstream phases (FIN PDFs) can reuse the contract.
-**Plans**: TBD
+**Plans:** 4 plans
+Plans:
+- [ ] 05-01-PLAN.md — Quiqup-GraphQL-host REST client (NEW host family) + download_pending_labels (MISS-03) + live-staging CALL-LOG — Wave 1
+- [ ] 05-02-PLAN.md — download_return_label (MISS-05) reusing Wave-1 client + live-staging CALL-LOG — Wave 2
+- [ ] 05-03-PLAN.md — PlatformApiClient extraHeaders extension + download_slip (MISS-06) with slipType z.enum + live-staging CALL-LOG — Wave 3
+- [ ] 05-04-PLAN.md — Langfuse eval coverage for the new Quiqup-GraphQL-host family + 5 STATIC scorers (binary-envelope, auth-isolation, slip-type-enum, no-guardrails, error-class-uniqueness) + CI gate update — Wave 4
 **UI hint**: no
 
 ### Phase 6: Inbound completion + Fulfilment gaps
@@ -207,7 +212,7 @@ Plans:
 | 2. Integrations (Shopify / WooCommerce / Salla) | 6/6 | Complete | 2026-05-19 |
 | 3. Orders — Read Path | 5/5 | Complete | 2026-05-20 |
 | 4. Orders — Write Path & Lifecycle | 5/5 | Complete | 2026-05-21 |
-| 5. Labels, Slips & PDFs | 0/0 | Not started | - |
+| 5. Labels, Slips & PDFs | 0/4 | Plans created | - |
 | 6. Inbound completion + Fulfilment gaps | 0/0 | Not started | - |
 | 7. Inventory expansion | 0/0 | Not started | - |
 | 8. Shipments & Shipping Profiles | 0/0 | Not started | - |
