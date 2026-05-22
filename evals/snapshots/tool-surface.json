@@ -24,6 +24,7 @@
     "download_orders_export": "enabled",
     "download_pending_labels": "enabled",
     "download_return_label": "enabled",
+    "download_slip": "enabled",
     "export_order": "enabled",
     "find_order_by_id_or_barcode": "enabled",
     "get_account": "enabled",

@@ -366,3 +366,284 @@ describe("download_return_label", () => {
     expect(mod.spec.guardrails).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 3: download_slip (MISS-06)
+// ---------------------------------------------------------------------------
+
+const PLATFORM_HOST_PROD = "https://platform-api.quiqup.com";
+const PLATFORM_HOST_STAGING = "https://platform-api.staging.quiqup.com";
+
+const originalPlatformEnv = {
+  QUIQUP_PLATFORM_API_BASE_URL: process.env.QUIQUP_PLATFORM_API_BASE_URL,
+  QUIQUP_PLATFORM_API_STAGING_BASE_URL:
+    process.env.QUIQUP_PLATFORM_API_STAGING_BASE_URL,
+};
+
+beforeEach(() => {
+  delete process.env.QUIQUP_PLATFORM_API_BASE_URL;
+  delete process.env.QUIQUP_PLATFORM_API_STAGING_BASE_URL;
+});
+
+afterEach(() => {
+  for (const [k, v] of Object.entries(originalPlatformEnv)) {
+    if (v === undefined) {
+      delete process.env[k];
+    } else {
+      process.env[k] = v;
+    }
+  }
+});
+
+describe("download_slip", () => {
+  it("happy path returns the dual content block envelope for picking-list", async () => {
+    const pdfBytes = new Uint8Array([
+      0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34,
+    ]);
+    server.use(
+      http.get(`${PLATFORM_HOST_PROD}/slips/picking-list`, () =>
+        new HttpResponse(pdfBytes, {
+          status: 200,
+          headers: { "Content-Type": "application/pdf" },
+        }),
+      ),
+    );
+
+    const mod = await import("../../lib/tools/download-slip");
+    const result = await mod.spec.handler(auth, {
+      slipType: "picking-list",
+      order_ids: [12345, 12346],
+      environment: "production",
+    });
+
+    expect(result.content).toHaveLength(2);
+
+    const resourceBlock = result.content[0];
+    if (resourceBlock.type !== "resource") {
+      throw new Error(
+        `expected a "resource" block at index 0, got "${resourceBlock.type}"`,
+      );
+    }
+    const resourcePayload = resourceBlock.resource as {
+      uri: string;
+      mimeType?: string;
+      blob?: string;
+    };
+    expect(resourcePayload.mimeType).toContain("application/pdf");
+    expect(resourcePayload.uri).toBe(
+      "quiqup-label://picking-list-12345-and-1-more.pdf",
+    );
+    expect(typeof resourcePayload.blob).toBe("string");
+    expect((resourcePayload.blob as string).length).toBeGreaterThan(0);
+    expect(
+      Buffer.from(resourcePayload.blob as string, "base64").equals(
+        Buffer.from(pdfBytes),
+      ),
+    ).toBe(true);
+
+    const metaBlock = result.content[1];
+    if (metaBlock.type !== "text") {
+      throw new Error("expected text block at index 1");
+    }
+    const parsed = JSON.parse(metaBlock.text);
+    expect(parsed.contentType).toContain("application/pdf");
+    expect(parsed.filenameHint).toBe("picking-list-12345-and-1-more.pdf");
+    expect(parsed.base64).toBe(resourcePayload.blob);
+  });
+
+  it("single-order filenameHint is <slipType>-<orderId>.pdf (no and-N-more suffix)", async () => {
+    server.use(
+      http.get(`${PLATFORM_HOST_PROD}/slips/picking-list`, () =>
+        new HttpResponse(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+          status: 200,
+          headers: { "Content-Type": "application/pdf" },
+        }),
+      ),
+    );
+
+    const mod = await import("../../lib/tools/download-slip");
+    const result = await mod.spec.handler(auth, {
+      slipType: "picking-list",
+      order_ids: [99],
+      environment: "production",
+    });
+
+    const metaBlock = result.content[1];
+    if (metaBlock.type !== "text") throw new Error("expected text block");
+    const parsed = JSON.parse(metaBlock.text);
+    expect(parsed.filenameHint).toBe("picking-list-99.pdf");
+
+    const resourceBlock = result.content[0];
+    if (resourceBlock.type !== "resource") throw new Error("expected resource block");
+    const resource = resourceBlock.resource as { uri: string };
+    expect(resource.uri).toBe("quiqup-label://picking-list-99.pdf");
+  });
+
+  it("forwards api-version: 20180108 and Accept: application/pdf headers", async () => {
+    let capturedApiVersion: string | null = null;
+    let capturedAccept: string | null = null;
+    server.use(
+      http.get(`${PLATFORM_HOST_PROD}/slips/picking-list`, ({ request }) => {
+        capturedApiVersion = request.headers.get("api-version");
+        capturedAccept = request.headers.get("accept");
+        return new HttpResponse(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+          status: 200,
+          headers: { "Content-Type": "application/pdf" },
+        });
+      }),
+    );
+
+    const mod = await import("../../lib/tools/download-slip");
+    await mod.spec.handler(auth, {
+      slipType: "picking-list",
+      order_ids: [12345],
+      environment: "production",
+    });
+
+    expect(capturedApiVersion).toBe("20180108");
+    // Accept header must be application/pdf — NOT application/json (which would 406).
+    expect(capturedAccept).toBe("application/pdf");
+    expect(capturedAccept).not.toBe("application/json");
+  });
+
+  it("rejects slipType values outside the enum at the schema layer", async () => {
+    const mod = await import("../../lib/tools/download-slip");
+    // Non-enum string value
+    expect(
+      mod.spec.inputSchema.safeParse({
+        slipType: "invoice",
+        order_ids: [1],
+        environment: "production",
+      }).success,
+    ).toBe(false);
+    // Empty string
+    expect(
+      mod.spec.inputSchema.safeParse({
+        slipType: "",
+        order_ids: [1],
+        environment: "production",
+      }).success,
+    ).toBe(false);
+    // Numeric value
+    expect(
+      mod.spec.inputSchema.safeParse({
+        slipType: 1,
+        order_ids: [1],
+        environment: "production",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects empty order_ids at the schema layer", async () => {
+    const mod = await import("../../lib/tools/download-slip");
+    const result = mod.spec.inputSchema.safeParse({
+      slipType: "picking-list",
+      order_ids: [],
+      environment: "production",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects order_ids > 500 entries at the schema layer", async () => {
+    const mod = await import("../../lib/tools/download-slip");
+    const tooMany = Array.from({ length: 501 }, (_, i) => i + 1);
+    const result = mod.spec.inputSchema.safeParse({
+      slipType: "picking-list",
+      order_ids: tooMany,
+      environment: "production",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("encodes order_ids as a comma-separated query string on the wire", async () => {
+    let capturedUrl: URL | null = null;
+    server.use(
+      http.get(`${PLATFORM_HOST_PROD}/slips/picking-list`, ({ request }) => {
+        capturedUrl = new URL(request.url);
+        return new HttpResponse(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+          status: 200,
+          headers: { "Content-Type": "application/pdf" },
+        });
+      }),
+    );
+
+    const mod = await import("../../lib/tools/download-slip");
+    await mod.spec.handler(auth, {
+      slipType: "picking-list",
+      order_ids: [1, 2, 3],
+      environment: "production",
+    });
+
+    expect(capturedUrl).not.toBeNull();
+    expect((capturedUrl as unknown as URL).searchParams.get("order_ids")).toBe(
+      "1,2,3",
+    );
+  });
+
+  it("supports packing-list slipType and routes to the correct path", async () => {
+    let requestCount = 0;
+    server.use(
+      http.get(`${PLATFORM_HOST_PROD}/slips/packing-list`, () => {
+        requestCount++;
+        return new HttpResponse(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+          status: 200,
+          headers: { "Content-Type": "application/pdf" },
+        });
+      }),
+    );
+
+    const mod = await import("../../lib/tools/download-slip");
+    const result = await mod.spec.handler(auth, {
+      slipType: "packing-list",
+      order_ids: [12345],
+      environment: "production",
+    });
+
+    expect(requestCount).toBe(1);
+    const metaBlock = result.content[1];
+    if (metaBlock.type !== "text") throw new Error("expected text block");
+    const parsed = JSON.parse(metaBlock.text);
+    expect(parsed.filenameHint).toBe("packing-list-12345.pdf");
+  });
+
+  it("forwards environment: staging to the staging host", async () => {
+    let requestCount = 0;
+    server.use(
+      http.get(
+        `${PLATFORM_HOST_STAGING}/slips/picking-list`,
+        () => {
+          requestCount++;
+          return new HttpResponse(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+            status: 200,
+            headers: { "Content-Type": "application/pdf" },
+          });
+        },
+      ),
+    );
+
+    const mod = await import("../../lib/tools/download-slip");
+    await mod.spec.handler(auth, {
+      slipType: "picking-list",
+      order_ids: [12345],
+      environment: "staging",
+    });
+
+    expect(requestCount).toBe(1);
+  });
+
+  it("rejects unauthenticated callers", async () => {
+    const mod = await import("../../lib/tools/download-slip");
+    await expect(
+      mod.spec.handler(authAnon, {
+        slipType: "picking-list",
+        order_ids: [12345],
+        environment: "production",
+      }),
+    ).rejects.toThrow(/requires an authenticated user/);
+  });
+
+  it("has NO guardrails block (read-only tool)", async () => {
+    const mod = await import("../../lib/tools/download-slip");
+    expect(mod.spec.guardrails).toBeUndefined();
+  });
+});
