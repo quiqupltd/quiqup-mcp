@@ -19,7 +19,7 @@ Phase 1 establishes the auth/lookup substrate that everything else depends on. P
 - [x] **Phase 2: Integrations (Shopify / WooCommerce / Salla)** — External-OAuth-shape Platform endpoints; two DESTRUCTIVE deletes gated by `confirm: true`. Completed 2026-05-19 (6/6 waves).
 - [x] **Phase 3: Orders — Read Path** — Orders Core GraphQL + Audit + Ex-core CSV export + Quiqup REST history; introduces three new service clients. Completed 2026-05-20 (5/5 waves).
 - [x] **Phase 4: Orders — Write Path & Lifecycle** — All `batch/set_*` status transitions, mission creation/transfer, and write-side Platform endpoints; every tool DESTRUCTIVE-gated. Completed 2026-05-21 (5/5 waves; 20 tools shipped + 4 family evals + 8 STATIC scorers locking D-01..D-06 + T-04-13/14/26..31 at CI).
-- [ ] **Phase 5: Labels, Slips & PDFs** — Quiqup-GraphQL-host REST client + base64 PDF response pattern shared by later phases (FIN PDFs).
+- [x] **Phase 5: Labels, Slips & PDFs** — Quiqup-GraphQL-host REST client + base64 PDF response pattern shared by later phases (FIN PDFs). Completed 2026-05-22 (4/4 waves; 3 tools shipped: MISS-03/05/06 + 5 STATIC scorers + eval:labels-slips-pdfs CI job).
 - [ ] **Phase 6: Inbound completion + Fulfilment gaps** — Three INBD gaps + six PROD gaps; closes the fulfilment receiving + product catalog endpoints.
 - [ ] **Phase 7: Inventory expansion** — CBM history, totals, sync triggers/state, snapshot, CSV exports; completes fulfilment inventory surface.
 - [ ] **Phase 8: Shipments & Shipping Profiles** — Carrier capability lookups + dispatcher rule-set CRUD; one DESTRUCTIVE delete.
@@ -212,7 +212,7 @@ Plans:
 | 2. Integrations (Shopify / WooCommerce / Salla) | 6/6 | Complete | 2026-05-19 |
 | 3. Orders — Read Path | 5/5 | Complete | 2026-05-20 |
 | 4. Orders — Write Path & Lifecycle | 5/5 | Complete | 2026-05-21 |
-| 5. Labels, Slips & PDFs | 0/4 | Plans created | - |
+| 5. Labels, Slips & PDFs | 4/4 | Executed | 2026-05-22 |
 | 6. Inbound completion + Fulfilment gaps | 0/0 | Not started | - |
 | 7. Inventory expansion | 0/0 | Not started | - |
 | 8. Shipments & Shipping Profiles | 0/0 | Not started | - |

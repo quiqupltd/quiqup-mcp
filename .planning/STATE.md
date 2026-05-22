@@ -9,22 +9,22 @@
 
 ## Current Position
 
-- **current_phase:** 5 (planned — Labels, Slips & PDFs; ready to execute)
-- **current_plan:** 05-01 (next — execute Wave 1)
-- **status:** Phase 5 PLANNED (4/4 plans created 2026-05-22, verified by gsd-plan-checker). Phases 1-4 all shipped (20 plans / 93 tools / 13 service-host families with Langfuse evals).
-- **progress:** Phase 5 planning complete 2026-05-22 — 4 plans in 4 sequential waves: 05-01 stands up the new Quiqup-GraphQL-host REST client (own QuiqupGraphqlHostError) + download_pending_labels (MISS-03); 05-02 reuses the client for download_return_label (MISS-05); 05-03 extends PlatformApiClient with backwards-compat extraHeaders + download_slip (MISS-06, slipType z.enum-pinned); 05-04 ships the family Langfuse eval + 5 new STATIC scorers (binary-envelope-contract-present, auth-isolation-quiqup-graphql-host, slip-type-enum-pin, no-guardrails-on-read-tools, quiqup-graphql-host-error-class-uniqueness) and the eval:labels-slips-pdfs CI job. Every Quiqup-host tool plan carries a blocking checkpoint:human-verify task producing a CALL-LOG-*.md per AGENTS.md.
+- **current_phase:** 6 (next — Inbound completion + Fulfilment gaps)
+- **current_plan:** 06-01 (next — pending planning)
+- **status:** Phase 5 EXECUTED (4/4 plans shipped 2026-05-22). Phases 1-5 all done.
+- **progress:** Phase 5 closed 2026-05-22 — 3 new tools shipped: download_pending_labels (MISS-03), download_return_label (MISS-05), download_slip (MISS-06). New Quiqup-GraphQL-host REST client (QuiqupGraphqlHostClient + QuiqupGraphqlHostError); PlatformApiClient extended with backwards-compat extraHeaders; binary-envelope contract { contentType, base64, filenameHint } locked at CI by 5 new STATIC scorers in eval:labels-slips-pdfs. 768 passed | 3 skipped | 0 regressions. Live-staging CALL-LOGs deferred (developer decision 2026-05-22 — to be completed before production promotion). 95 tools total.
 
 ```
-[█████████           ] 40% (Phases 1-4 of 10 complete)
+[████████████        ] 50% (Phases 1-5 of 10 complete)
 ```
 
 ## Performance Metrics
 
-- Phases completed: 4 (Phase 1 + Phase 2 + Phase 3 + Phase 4)
-- Plans completed: 20 (01-01..01-04, 02-01..02-06, 03-01..03-05, 04-01..04-05)
-- Requirements shipped (v1): see REQUIREMENTS.md (Phase 4 added 20 tools: ORDS-03/04/06/07, ORDC-04/05, ORDT-03..14, MISS-01/02 — all locked at CI via plan 04-05 STATIC scorers).
-- Service-host families with Langfuse eval: 13 (4 Phase-1 + 5 Phase-2 + 4 Phase-3). Phase 4 introduced 0 new service hosts — coverage is per-tool-FAMILY: per-family eval count goes 13 → 17 with batch-transitions + single-order-mutations + order-creation + missions (4 Phase-4 families).
-- New service hosts introduced in Phase 4: 0 (all 20 tools reuse Phases 1-3 clients — platform-api, quiqup-rest, orders-core-rest).
+- Phases completed: 5 (Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5)
+- Plans completed: 24 (01-01..01-04, 02-01..02-06, 03-01..03-05, 04-01..04-05, 05-01..05-04)
+- Requirements shipped (v1): see REQUIREMENTS.md (Phase 5 added 3 tools: MISS-03/05/06 — all locked at CI via plan 05-04 STATIC scorers).
+- Service-host families with Langfuse eval: 14 (4 Phase-1 + 5 Phase-2 + 4 Phase-3 + 0 Phase-4 + 1 Phase-5: Quiqup-GraphQL-host).
+- New service hosts introduced in Phase 5: 1 (Quiqup-GraphQL-host REST surface — graph.quiqup.com / graph.staging.quiqup.com).
 
 ### Plan Execution Log
 
@@ -50,6 +50,10 @@
 | 04    | 03   | ~17m    | 3     | 5     | 2026-05-21 |
 | 04    | 04   | ~16m    | 4     | 12    | 2026-05-21 |
 | 04    | 05   | ~15m    | 4     | 14    | 2026-05-21 |
+| 05    | 01   | ~10m    | 3     | 7     | 2026-05-22 |
+| 05    | 02   | ~5m     | 2     | 5     | 2026-05-22 |
+| 05    | 03   | ~15m    | 3     | 7     | 2026-05-22 |
+| 05    | 04   | ~20m    | 3     | 5     | 2026-05-22 |
 
 ## Accumulated Context
 
@@ -101,6 +105,9 @@
 - 2026-05-21 (04-05): args-overlap scorer extended with BL-04 forbidden-keys check (order-creation only) — first eval scorer that combines model-behaviour signal (the LLM ignored user_id when told to ignore it) with structural negative-case enforcement (the schema doesn't accept user_id anyway). Pattern reusable in future phases for any tool where caller-supplied fields are SEMANTICALLY rejected but the agent might still try to pass them.
 - 2026-05-21 (04-05): Numeric-bound / CSV-cap / dry-run-richness scorers use readFile + substring rather than structural Zod inspection. The values (`100_000`, `1000`, `13_500_000`, `dryRun: true`) live as numeric literals or string fragments in source — Zod schemas don't expose `.max(...)` parameters cleanly. Substring check is the simpler, more readable lock that PR-reviewers can verify without running the scorer.
 - 2026-05-21 (04-05): Phase 4 closed cleanly without surfacing follow-up infra work. The factory pattern (D-01) absorbed 11 of the 12 batch-transition tools into one chokepoint; unpool_order remains hand-written because its single-id PATH parameter doesn't fit the batch-shaped factory. Future phases adding a similarly-shaped lifecycle group SHOULD reach for the factory pattern rather than 12 hand-written files.
+- 2026-05-22 (05-01): `QuiqupGraphqlHostClient` is a NEW service-host family (graph.quiqup.com / graph.staging.quiqup.com) — DISTINCT from `orders-api.quiqup.com/graph` (Phase 3 Orders Core GraphQL). Env-var family is `QUIQUP_GRAPHQL_HOST_BASE_URL` / `QUIQUP_GRAPHQL_HOST_STAGING_BASE_URL` (no fallback aliasing to QUIQUP_ORDERS_GRAPH_URL). Client introduces own `QuiqupGraphqlHostError` (mirrors ExCoreError shape: status + body + name) per the STATE.md new-host-error-class rule.
+- 2026-05-22 (05-03): `PlatformApiClient.request()` extended with backwards-compatible `extraHeaders?: Record<string, string>` (spread last, empty default). All ~30 Phase 1-4 callers are unaffected. Establishes the pattern for future tools that need custom headers on the Platform host (e.g. Phase 8 SHIP-02 `x-api-version: 20240101` for carrier capabilities).
+- 2026-05-22 (05): AGENTS.md mandatory live-staging-call for all three Phase-5 Quiqup-host tools deferred by developer decision — MSW unit tests cover code correctness; manual Clerk OAuth call primarily tests infrastructure. CALL-LOG files created with deferred-waiver content. Must be completed before production promotion. This decision does NOT set a precedent for waiving the rule in future phases without explicit developer sign-off.
 
 ### Todos
 
@@ -118,9 +125,9 @@
 
 ## Session Continuity
 
-- **Last session:** 2026-05-20 — completed Plan 03-04 (Phase 3 Wave 4: Ex-core CSV export + Orders Core REST multipart upload — ORDL-07/ORDS-08). Shipped: two NEW service clients (`lib/clients/ex-core.ts` with EX_API_BASE_URL family, `lib/clients/orders-core-rest.ts` with FE-aligned QUIQUP_ORDERS_GRAPH_URL minus /graph fallback chain), two tool specs (`lib/tools/download-orders-export.ts` returning the canonical `{ contentType, base64, filenameHint }` binary envelope, `lib/tools/upload-order-document.ts` carrying BL-01 canonical guardrails + BL-04 server-bound identity + 10MB pre-flight cap + filename hygiene), and three test files (6 ex-core client tests, 6 orders-core-rest client tests, 14 tool tests across 2 describe blocks). `requestMultipart` deliberately omits Content-Type — runtime test locks in the multipart-without-manual-Content-Type contract by asserting the captured Content-Type startsWith multipart/form-data AND contains boundary= parameter. `app/[transport]/route.ts` registers both new tools under a Phase-3 Wave-4 comment block; `evals/snapshots/tool-surface.json` records both as `enabled` (93 total tools, +2 from Wave 3's 91). Full suite: 585 passed, 3 skipped, 0 regressions (+26 vs Wave 3 baseline). `EVAL_GATE=1 bun run eval:tool-surface` exits 0. Commits: `1601297` (Task 1 — Ex-core client + ORDL-07), `69077cd` (Task 2 — Orders Core REST + ORDS-08), `c9e49c5` (Task 3 — tool tests + registration + snapshot).
-- **Next session:** `/gsd:execute-phase 3` continues with Plan 03-05 (final Phase-3 wave — Langfuse eval coverage for the 4 new client families + CI gate updates per the canonical Phase-N final-wave eval pattern).
+- **Last session:** 2026-05-22 — completed Phase 5 (4/4 plans shipped). Wave 1: new `QuiqupGraphqlHostClient` + `QuiqupGraphqlHostError` (own error class per STATE.md decision) + `download_pending_labels` (MISS-03); Wave 2: `download_return_label` (MISS-05) reusing client; Wave 3: `PlatformApiClient.extraHeaders` backwards-compat extension + `download_slip` (MISS-06, slipType z.enum-pinned); Wave 4: `eval:labels-slips-pdfs` + 5 STATIC scorers (binary-envelope-contract-present, auth-isolation-quiqup-graphql-host, slip-type-enum-pin, no-guardrails-on-read-tools, quiqup-graphql-host-error-class-uniqueness) + new CI job. 95 tools total. 768 passed | 3 skipped | 0 regressions. Live-staging CALL-LOGs for all 3 Phase-5 Quiqup-host tools deferred by developer decision (to be completed before production promotion). `EVAL_GATE=1 bun run eval:tool-surface` exits 0.
+- **Next session:** `/gsd:plan-phase 6` — Phase 6: Inbound completion + Fulfilment gaps (INBD-07/08/09, PROD-04..09 — three INBD gaps + six PROD gaps, two DESTRUCTIVE tools).
 
 ---
 *State initialized: 2026-05-19*
-*Last updated: 2026-05-20 (quick task 260520-bwa — live-test `get_order_history` against staging order 57282; AbortSignal.timeout(25_000) + maxDuration=60 + live-staging-verification rule in AGENTS.md)*
+*Last updated: 2026-05-22 (Phase 5 executed — Labels, Slips & PDFs; 3 tools + 1 new service host + 5 STATIC scorers)*
