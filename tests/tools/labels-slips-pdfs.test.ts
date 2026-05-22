@@ -189,3 +189,180 @@ describe("download_pending_labels", () => {
     expect(mod.spec.guardrails).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 2: download_return_label (MISS-05)
+// ---------------------------------------------------------------------------
+describe("download_return_label", () => {
+  it("happy path returns the dual content block envelope", async () => {
+    // Minimal PDF magic bytes.
+    const pdfBytes = new Uint8Array([
+      0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34,
+    ]);
+    server.use(
+      http.get(`${GRAPHQL_HOST_PROD}/return_order_label/57282`, () =>
+        new HttpResponse(pdfBytes, {
+          status: 200,
+          headers: { "Content-Type": "application/pdf" },
+        }),
+      ),
+    );
+
+    const mod = await import("../../lib/tools/download-return-label");
+    const result = await mod.spec.handler(auth, {
+      order_id: "57282",
+      environment: "production",
+    });
+
+    // Two content blocks: resource block + metadata text block.
+    expect(result.content).toHaveLength(2);
+
+    // Block 0 MUST be a `resource` block — binary-envelope-contract.
+    const resourceBlock = result.content[0];
+    if (resourceBlock.type !== "resource") {
+      throw new Error(
+        `expected a "resource" block at index 0, got "${resourceBlock.type}"`,
+      );
+    }
+    const resourcePayload = resourceBlock.resource as {
+      uri: string;
+      mimeType?: string;
+      blob?: string;
+    };
+    expect(resourcePayload.mimeType).toContain("application/pdf");
+    expect(resourcePayload.uri).toBe(
+      "quiqup-label://return-label-57282.pdf",
+    );
+    expect(typeof resourcePayload.blob).toBe("string");
+    expect((resourcePayload.blob as string).length).toBeGreaterThan(0);
+    // Round-trip: base64 must decode back to the bytes the server sent.
+    expect(
+      Buffer.from(resourcePayload.blob as string, "base64").equals(
+        Buffer.from(pdfBytes),
+      ),
+    ).toBe(true);
+
+    // Block 1 is the metadata `text` block.
+    const metaBlock = result.content[1];
+    if (metaBlock.type !== "text") {
+      throw new Error("expected text block at index 1");
+    }
+    const parsed = JSON.parse(metaBlock.text);
+    expect(parsed.contentType).toContain("application/pdf");
+    expect(typeof parsed.base64).toBe("string");
+    expect(parsed.base64.length).toBeGreaterThan(0);
+    expect(parsed.filenameHint).toBe("return-label-57282.pdf");
+    // base64 deep-equals the resource blob.
+    expect(parsed.base64).toBe(resourcePayload.blob);
+    // Round-trip from the text-block base64.
+    expect(
+      Buffer.from(parsed.base64, "base64").equals(Buffer.from(pdfBytes)),
+    ).toBe(true);
+  });
+
+  it("encodes order_id in the URL path (T-03-24 / T-05-10)", async () => {
+    // The slash in "57282/admin" MUST be percent-encoded in the outbound URL.
+    let capturedPath: string | null = null;
+    server.use(
+      http.get(
+        `${GRAPHQL_HOST_PROD}/return_order_label/57282%2Fadmin`,
+        ({ request }) => {
+          capturedPath = new URL(request.url).pathname;
+          return new HttpResponse(
+            new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/pdf" },
+            },
+          );
+        },
+      ),
+    );
+
+    const mod = await import("../../lib/tools/download-return-label");
+    await mod.spec.handler(auth, {
+      order_id: "57282/admin",
+      environment: "production",
+    });
+
+    // Verify the path reached MSW had the encoded slash.
+    expect(capturedPath).toBe("/return_order_label/57282%2Fadmin");
+  });
+
+  it("uses the raw orderId in the filenameHint, not the encoded form (T-05-12)", async () => {
+    // order_id "57282" is benign here — tests that no spurious encoding appears.
+    server.use(
+      http.get(`${GRAPHQL_HOST_PROD}/return_order_label/57282`, () =>
+        new HttpResponse(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+          status: 200,
+          headers: { "Content-Type": "application/pdf" },
+        }),
+      ),
+    );
+
+    const mod = await import("../../lib/tools/download-return-label");
+    const result = await mod.spec.handler(auth, {
+      order_id: "57282",
+      environment: "production",
+    });
+
+    const resourceBlock = result.content[0];
+    if (resourceBlock.type !== "resource") throw new Error("expected resource block");
+    const resource = resourceBlock.resource as { uri: string };
+    expect(resource.uri).toBe("quiqup-label://return-label-57282.pdf");
+
+    const metaBlock = result.content[1];
+    if (metaBlock.type !== "text") throw new Error("expected text block");
+    const parsed = JSON.parse(metaBlock.text);
+    // Raw order_id in filenameHint — no percent-encoding artifacts.
+    expect(parsed.filenameHint).toBe("return-label-57282.pdf");
+  });
+
+  it("rejects unauthenticated callers", async () => {
+    const mod = await import("../../lib/tools/download-return-label");
+    await expect(
+      mod.spec.handler(authAnon, { order_id: "57282", environment: "production" }),
+    ).rejects.toThrow(/requires an authenticated user/);
+  });
+
+  it("forwards environment: staging to the staging host", async () => {
+    let requestCount = 0;
+    server.use(
+      http.get(
+        `${GRAPHQL_HOST_STAGING}/return_order_label/57282`,
+        () => {
+          requestCount++;
+          return new HttpResponse(
+            new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/pdf" },
+            },
+          );
+        },
+      ),
+    );
+
+    const mod = await import("../../lib/tools/download-return-label");
+    await mod.spec.handler(auth, {
+      order_id: "57282",
+      environment: "staging",
+    });
+
+    expect(requestCount).toBe(1);
+  });
+
+  it("rejects empty order_id at the schema layer", async () => {
+    const mod = await import("../../lib/tools/download-return-label");
+    const result = mod.spec.inputSchema.safeParse({
+      order_id: "",
+      environment: "production",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("has NO guardrails block (read-only tool)", async () => {
+    const mod = await import("../../lib/tools/download-return-label");
+    expect(mod.spec.guardrails).toBeUndefined();
+  });
+});

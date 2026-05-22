@@ -200,8 +200,9 @@ import { spec as bulkCreateOrdersSpec } from "@/lib/tools/bulk-create-orders";
 import { spec as createMissionSpec } from "@/lib/tools/create-mission";
 import { spec as transferMissionOrdersSpec } from "@/lib/tools/transfer-mission-orders";
 
-// -- Phase 5: Labels, Slips & PDFs — Quiqup-GraphQL-host REST client + pending-orders label (MISS-03) --
+// -- Phase 5: Labels, Slips & PDFs — Quiqup-GraphQL-host REST + label/slip PDFs --
 import { spec as downloadPendingLabelsSpec } from "@/lib/tools/download-pending-labels";
+import { spec as downloadReturnLabelSpec } from "@/lib/tools/download-return-label";
 
 // Vercel/Next serverless function timeout (mcp-handler README's documented
 // ceiling on Hobby; higher available on Pro). The default of 10s is shorter
@@ -374,8 +375,9 @@ const handler = createMcpHandler(
     registerTool(server, createMissionSpec);
     registerTool(server, transferMissionOrdersSpec);
 
-    // -- Phase 5: Labels, Slips & PDFs — Quiqup-GraphQL-host REST client + pending-orders label (MISS-03) --
+    // -- Phase 5: Labels, Slips & PDFs — Quiqup-GraphQL-host REST + label/slip PDFs --
     registerTool(server, downloadPendingLabelsSpec);
+    registerTool(server, downloadReturnLabelSpec);
   },
   {
     // SEP-973 `icons` on `Implementation` — Claude.ai's connector UI renders
