@@ -31,6 +31,7 @@
     "eval:single-order-mutations": "bun run evals/single-order-mutations.ts",
     "eval:order-creation": "bun run evals/order-creation.ts",
     "eval:missions": "bun run evals/missions.ts",
+    "eval:labels-slips-pdfs": "bun run evals/labels-slips-pdfs.ts",
     "browserbase:create-context": "bun run scripts/browserbase-create-context.ts",
     "browserbase:bootstrap-login": "bun run scripts/quiqup-bootstrap-login.ts",
     "inspect:orders-filter": "bun run scripts/inspect-orders-filter.ts"

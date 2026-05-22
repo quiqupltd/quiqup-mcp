@@ -458,3 +458,27 @@ jobs:
           LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: bun run eval:missions
+
+  labels-slips-pdfs:
+    name: Eval gate — phase5-labels-slips-pdfs (3 tools; binary-envelope + auth-isolation + slipType enum + no-guardrails + error-class locked)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: "Eval gate — eval:labels-slips-pdfs (tool-name-match >= 0.75, args-overlap >= 0.75, description-quality >= 1.0, binary-envelope-contract-present >= 1.0, auth-isolation-quiqup-graphql-host >= 1.0, slip-type-enum-pin >= 1.0, no-guardrails-on-read-tools >= 1.0, quiqup-graphql-host-error-class-uniqueness >= 1.0)"
+        env:
+          EVAL_GATE: "1"
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: bun run eval:labels-slips-pdfs
