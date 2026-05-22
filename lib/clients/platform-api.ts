@@ -84,10 +84,24 @@ export class PlatformApiClient {
    * URLSearchParams (undefined values are skipped so callers can spread
    * partial maps).
    *
-   * Headers:
-   *   - Authorization: Bearer <jwt>
-   *   - Accept: application/json
-   *   - Content-Type: application/json (only when body is present)
+   * Headers (in spread order — later keys win on collision):
+   *   (1) Authorization: Bearer <jwt>
+   *   (2) Accept: application/json
+   *   (3) Content-Type: application/json (only when body is present)
+   *   (4) Optional `extraHeaders` are spread LAST and therefore override
+   *       defaults — used by Phase-5 `download_slip` (api-version: 20180108 +
+   *       Accept: application/pdf) and reserved for Phase-8
+   *       `list_carrier_capabilities` (x-api-version: 20240101).
+   *
+   * The `extraHeaders` parameter is optional — when absent (the default for
+   * every Phase 1-4 caller) the method behaves identically to its
+   * pre-Phase-5 form.
+   *
+   * FOOTGUN: a caller passing `extraHeaders: { Authorization: "..." }` WOULD
+   * override the Bearer token because Authorization is added at position (1)
+   * and extraHeaders spread at position (4). This tool does NOT pass an
+   * Authorization key in extraHeaders; future callers MUST NOT either.
+   * (T-05-16)
    *
    * The JSON-vs-binary content-type branch is preserved verbatim from
    * `quiqup-rest.ts:124-135` per the 03-REVIEW WR-01 fix guidance.
@@ -98,6 +112,7 @@ export class PlatformApiClient {
     init: {
       body?: unknown;
       query?: Record<string, string | number | boolean | undefined>;
+      extraHeaders?: Record<string, string>;
     } = {},
   ): Promise<unknown> {
     const base =
@@ -116,6 +131,7 @@ export class PlatformApiClient {
         ...(init.body !== undefined
           ? { "Content-Type": "application/json" }
           : {}),
+        ...(init.extraHeaders ?? {}),
       },
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     });
