@@ -27,6 +27,7 @@
 import { createClerkClient } from "@clerk/backend";
 import {
   getLastmileBaseUrl,
+  getPlatformApiBaseUrl,
   type QuiqupEnvironment,
 } from "@/lib/clients/quiqup-env";
 
@@ -117,6 +118,95 @@ export async function getQuiqupReadyJwt(userId: string): Promise<string> {
   });
   return jwt;
 }
+
+// ---------------------------------------------------------------------------
+// Impersonation helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown by `assertCallerIsAdminOrCsr` when the authenticated caller does not
+ * hold an admin or CSR role on platform-api.quiqup.com. This is the gate
+ * that prevents non-admin users from using `on_behalf_of_email`.
+ */
+export class ImpersonationForbiddenError extends Error {
+  constructor(userId: string) {
+    super(
+      `userId=${userId} is not a Quiqup admin or CSR — on_behalf_of_email requires ` +
+        "admin or CSR role (verified via platform-api /me). Run `whoami_platform` to " +
+        "check your role before retrying.",
+    );
+    this.name = "ImpersonationForbiddenError";
+  }
+}
+
+/**
+ * Look up a Clerk user by their email address and return the Clerk userId.
+ *
+ * Uses the Clerk Backend SDK's `users.getUserList()` with an emailAddress
+ * filter — this is the same `CLERK_SECRET_KEY`-gated SDK already used by
+ * `getQuiqupReadyJwt`. Returns the first matching userId (Clerk enforces
+ * email uniqueness within a tenant so there is at most one result).
+ *
+ * Throws if no matching user is found so callers receive a clear error
+ * instead of silently minting a JWT for the wrong account.
+ */
+export async function lookupClerkUserByEmail(email: string): Promise<string> {
+  const result = await clerk.users.getUserList({ emailAddress: [email] });
+  if (result.data.length === 0) {
+    throw new Error(
+      `No Clerk user found with email ${email}. Verify the address is a registered ` +
+        "Quiqup account and retry.",
+    );
+  }
+  // Non-null assertion: we checked data.length === 0 above.
+  // Clerk's SDK types `User.id` as `string | undefined` in some versions,
+  // but a real user record always has an id — the undefined is defensive.
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  return result.data[0]!.id!;
+}
+
+/**
+ * Verify that `callerUserId` holds an admin or CSR role on platform-api.
+ *
+ * Mints the caller's Quiqup session JWT (via `getQuiqupReadyJwt`) and calls
+ * `GET /me` on platform-api. The response carries `admin: boolean` and
+ * `csr: boolean` flags that Quiqup's backend populates from its own role
+ * store — this is the authoritative source, not a JWT claim we trust blindly.
+ *
+ * Throws `ImpersonationForbiddenError` when neither flag is true, so the
+ * `on_behalf_of_email` gate fails BEFORE any target email lookup (preventing
+ * even the Clerk userId exfiltration that a successful lookup would enable).
+ *
+ * @param callerUserId  The authenticated MCP session's Clerk userId.
+ * @param environment   Quiqup environment to verify against. Defaults to production.
+ */
+export async function assertCallerIsAdminOrCsr(
+  callerUserId: string,
+  environment: QuiqupEnvironment = "production",
+): Promise<void> {
+  const jwt = await getQuiqupReadyJwt(callerUserId);
+  const base = getPlatformApiBaseUrl(environment);
+  const res = await fetch(`${base}/me`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: "application/json",
+      "x-api-version": "1",
+    },
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Failed to verify admin status: platform-api /me returned HTTP ${res.status}. ` +
+        "Run `whoami_platform` to diagnose auth.",
+    );
+  }
+  const me = (await res.json()) as { admin?: boolean; csr?: boolean };
+  if (!me.admin && !me.csr) {
+    throw new ImpersonationForbiddenError(callerUserId);
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 /**
  * Authenticated GET against the Quiqup last-mile API on behalf of the given

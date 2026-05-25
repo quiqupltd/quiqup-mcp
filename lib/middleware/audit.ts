@@ -46,6 +46,17 @@ export interface AuditRecord {
   error?: string;
   /** Args after pii-redact processing — see lib/middleware/pii-redact.ts. */
   argsRedacted: unknown;
+  /**
+   * When an admin/CSR uses `on_behalf_of_email`, this is the Clerk userId of
+   * the account being acted upon (differs from `userId` which is the caller).
+   * Null / absent when no impersonation is in effect.
+   */
+  effectiveUserId?: string | null;
+  /**
+   * The email address that was passed as `on_behalf_of_email`, preserved
+   * verbatim for incident investigation. Null / absent when not impersonating.
+   */
+  impersonatedEmail?: string | null;
 }
 
 /** Stable prefix; log-aggregation pipelines match on this verbatim. */
@@ -96,6 +107,8 @@ export function emitAuditRecord(params: {
   durationMs: number;
   ok: boolean;
   error?: string;
+  effectiveUserId?: string | null;
+  impersonatedEmail?: string | null;
 }): void {
   auditLog({
     ts: new Date().toISOString(),
@@ -107,5 +120,7 @@ export function emitAuditRecord(params: {
     ok: params.ok,
     error: params.error,
     argsRedacted: redactArgs(params.args, params.tool),
+    effectiveUserId: params.effectiveUserId,
+    impersonatedEmail: params.impersonatedEmail,
   });
 }
