@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
-import type { z } from "zod";
+import { z } from "zod";
 import { QuiqupHttpError } from "@/lib/clients/quiqup-lastmile";
 import { emitAuditRecord } from "@/lib/middleware/audit";
 import {
@@ -8,11 +8,28 @@ import {
   IDEMPOTENCY_DEFAULT_TTL_MS,
 } from "@/lib/middleware/idempotency";
 import { consume } from "@/lib/middleware/rate-limit";
+import {
+  ImpersonationForbiddenError,
+  assertCallerIsAdminOrCsr,
+  lookupClerkUserByEmail,
+} from "@/lib/quiqup";
 
 /**
  * Flat auth context exposed to tool handlers. Built from `extra.authInfo`
  * by the registerTool wrapper so handlers don't have to redo the
  * Clerk-specific extraction every time.
+ *
+ * Impersonation note: when `on_behalf_of_email` is present in a tool call
+ * and the caller is an admin/CSR, the wrapper overrides `userId` to the
+ * TARGET's Clerk userId before passing this context to the handler. This
+ * means all tools that call `getQuiqupReadyJwt(auth.userId)` automatically
+ * mint JWTs for the correct account with zero code changes in the handlers.
+ *
+ * `effectiveUserId` is non-null ONLY during impersonation and equals the
+ * same value as `userId` in that case — it exists so the audit layer can
+ * distinguish "userId was changed for impersonation" vs "userId is the
+ * caller's own identity". The ORIGINAL caller's userId is captured in the
+ * audit record via a separate field before the override.
  */
 export interface AuthContext {
   userId: string | null;
@@ -24,6 +41,17 @@ export interface AuthContext {
   // pii-redact layer via the ALWAYS_REDACT_KEYS list (key "bearer" + "token"
   // + "jwt"); the AuthContext itself is never passed to redactArgs anyway.
   bearerToken: string | null;
+  /**
+   * Non-null when impersonating: the Clerk userId of the account being
+   * acted upon. Equals `userId` when impersonation is active (userId is
+   * overridden to the target). Null / absent when no impersonation is in effect.
+   */
+  effectiveUserId?: string | null;
+  /**
+   * The email address passed as `on_behalf_of_email`, preserved for
+   * handler logging if needed. Null / absent when not impersonating.
+   */
+  impersonatedEmail?: string | null;
 }
 
 /**
@@ -179,6 +207,30 @@ function compositeKey(userId: string | null, tool: string, idempKey?: string): s
   return idempKey === undefined ? `${u}:${tool}` : `${u}:${tool}:${idempKey}`;
 }
 
+/**
+ * Framework-level `on_behalf_of_email` parameter injected into every tool's
+ * inputSchema at registration time. This makes the field visible to the MCP
+ * SDK (so clients can pass it) while keeping it out of individual tool specs.
+ *
+ * When present, `invokeWithGuardrails` validates the caller is a Quiqup
+ * admin/CSR, resolves the email to a Clerk userId, and overrides `auth.userId`
+ * for the handler call — so all tools that call `getQuiqupReadyJwt(auth.userId)`
+ * automatically operate under the target account's identity.
+ */
+const ON_BEHALF_OF_FIELD = z
+  .string()
+  .email()
+  .optional()
+  .describe(
+    "Admin/CSR only: act on behalf of this user's Quiqup account. " +
+      "The caller must hold admin or CSR role on platform-api (verified via GET /me). " +
+      "Accepts the target user's email address (e.g. 'hamdy@amaracrown.com'). " +
+      "When set, all downstream JWT minting uses the TARGET's Clerk identity — " +
+      "order lookups, mutations, etc. operate as if that user made the call. " +
+      "The original caller's identity is preserved in the audit log. " +
+      "Non-admin callers receive ImpersonationForbiddenError.",
+  );
+
 // TODO(M4): output-schema enforcement. Currently `spec.outputSchema` is
 // carried but the wrapper does not parse handler output against it. M4
 // should add a warn-only `spec.outputSchema.safeParse(payload)` pass
@@ -204,7 +256,12 @@ export function registerTool<
       // The SDK expects a raw {field: ZodType} shape map, not a wrapped
       // z.object(...). We carry the wrapped form on the spec for ergonomic
       // .safeParse() in tests; .shape unwraps it for the SDK.
-      inputSchema: spec.inputSchema.shape,
+      // ON_BEHALF_OF_FIELD is injected here so every registered tool gains
+      // the impersonation parameter without any per-tool changes.
+      inputSchema: {
+        ...spec.inputSchema.shape,
+        on_behalf_of_email: ON_BEHALF_OF_FIELD,
+      },
     },
     async (
       args: Record<string, unknown>,
@@ -241,6 +298,8 @@ export function registerTool<
         sessionId: clerkAuth?.sessionId ?? null,
         scopes: clerkAuth?.scopes ?? authInfo?.scopes ?? [],
         bearerToken: authInfo?.token ?? null,
+        effectiveUserId: null,
+        impersonatedEmail: null,
       };
 
       return invokeWithGuardrails(spec, auth, args);
@@ -270,11 +329,80 @@ async function invokeWithGuardrails<
   const auditEnabled = guardrails ? guardrails.audit !== false : false;
   const start = Date.now();
 
-  // 1. Rate-limit gate. Denial returns the MCP error result immediately
-  //    AND is recorded in audit (the caller's pattern of hammering us is
-  //    exactly what audit logs need to surface).
+  // 0. Impersonation gate — must run BEFORE rate-limit so the composite
+  //    rate-limit key uses the CALLER's userId, not the target's. Admin/CSR
+  //    callers are the only ones who can trigger this path; non-admins get a
+  //    clear ImpersonationForbiddenError immediately.
+  //
+  //    When impersonation succeeds:
+  //      - `effectiveAuth.userId` = target's Clerk userId (used by handlers
+  //        for JWT minting via `getQuiqupReadyJwt(auth.userId)`)
+  //      - `callerUserId` preserved for audit records (never overwritten)
+  //      - `on_behalf_of_email` stripped from args before handler call
+  const callerUserId = auth.userId;
+  let effectiveAuth = auth;
+  const rawOnBehalfOf =
+    typeof args.on_behalf_of_email === "string"
+      ? args.on_behalf_of_email.trim()
+      : null;
+
+  if (rawOnBehalfOf) {
+    try {
+      if (!callerUserId) {
+        throw new Error(
+          "on_behalf_of_email requires an authenticated session — no userId in auth context.",
+        );
+      }
+      await assertCallerIsAdminOrCsr(callerUserId);
+      const targetUserId = await lookupClerkUserByEmail(rawOnBehalfOf);
+      effectiveAuth = {
+        ...auth,
+        userId: targetUserId,
+        effectiveUserId: targetUserId,
+        impersonatedEmail: rawOnBehalfOf,
+      };
+    } catch (err) {
+      // Impersonation setup failed — return isError immediately, before any
+      // handler or audit guardrail runs. Always audit these failures so
+      // denied impersonation attempts are visible in logs.
+      const msg = err instanceof Error ? err.message : String(err);
+      const isForbidden = err instanceof ImpersonationForbiddenError;
+      emitAuditRecord({
+        userId: callerUserId,
+        orgId: auth.orgId,
+        tool: spec.name,
+        args,
+        durationMs: Date.now() - start,
+        ok: false,
+        error: `impersonation-failed: ${msg}`,
+        impersonatedEmail: rawOnBehalfOf,
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: isForbidden
+              ? `Impersonation denied: ${msg}`
+              : `Impersonation setup failed: ${msg}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
+  // Strip the framework-level param so tool handlers never see it.
+  // We work on a shallow copy to avoid mutating the original args object
+  // (which may be referenced by the idempotency cache key builder).
+  const handlerArgs: Record<string, unknown> = { ...args };
+  delete handlerArgs.on_behalf_of_email;
+
+  // 1. Rate-limit gate. Keyed on the CALLER's userId so admin impersonation
+  //    doesn't consume the target's rate-limit budget. Denial returns the
+  //    MCP error result immediately AND is recorded in audit (the caller's
+  //    pattern of hammering us is exactly what audit logs need to surface).
   if (guardrails?.rateLimit) {
-    const rlKey = compositeKey(auth.userId, spec.name);
+    const rlKey = compositeKey(callerUserId, spec.name);
     const result = consume(
       rlKey,
       guardrails.rateLimit.capacity,
@@ -284,14 +412,16 @@ async function invokeWithGuardrails<
       const retryAfter = result.retryAfterMs ?? 0;
       if (auditEnabled) {
         emitAuditRecord({
-          userId: auth.userId,
+          userId: callerUserId,
           orgId: auth.orgId,
           tool: spec.name,
-          args,
-          idempotencyKey: extractIdempotencyKey(args, guardrails),
+          args: handlerArgs,
+          idempotencyKey: extractIdempotencyKey(handlerArgs, guardrails),
           durationMs: Date.now() - start,
           ok: false,
           error: `rate-limited; retry-after ${retryAfter}ms`,
+          effectiveUserId: effectiveAuth.effectiveUserId,
+          impersonatedEmail: effectiveAuth.impersonatedEmail,
         });
       }
       return {
@@ -309,7 +439,7 @@ async function invokeWithGuardrails<
   // 2. Idempotency wrap — but only if the caller actually supplied a key.
   //    Without a key we run the handler directly; this keeps tools usable
   //    without forcing every LLM call to invent a UUID.
-  const idempKey = extractIdempotencyKey(args, guardrails);
+  const idempKey = extractIdempotencyKey(handlerArgs, guardrails);
 
   // 3. Build the actual handler execution as a closure so we can either
   //    invoke directly or via getOrSet.
@@ -318,7 +448,7 @@ async function invokeWithGuardrails<
     isError?: boolean;
   }> => {
     try {
-      return await spec.handler(auth, args as z.input<TIn>);
+      return await spec.handler(effectiveAuth, handlerArgs as z.input<TIn>);
     } catch (err) {
       if (err instanceof QuiqupHttpError) {
         return quiqupErrorToToolResult(err);
@@ -332,7 +462,7 @@ async function invokeWithGuardrails<
   try {
     if (guardrails?.idempotency && idempKey) {
       const ttl = guardrails.idempotency.ttlMs ?? IDEMPOTENCY_DEFAULT_TTL_MS;
-      const cacheKey = compositeKey(auth.userId, spec.name, idempKey);
+      const cacheKey = compositeKey(callerUserId, spec.name, idempKey);
       outcome = await getOrSet(cacheKey, ttl, runHandler);
     } else {
       outcome = await runHandler();
@@ -346,14 +476,16 @@ async function invokeWithGuardrails<
     //    JSON-RPC error mapping); we just make sure audit fires.
     if (auditEnabled) {
       emitAuditRecord({
-        userId: auth.userId,
+        userId: callerUserId,
         orgId: auth.orgId,
         tool: spec.name,
-        args,
+        args: handlerArgs,
         idempotencyKey: idempKey,
         durationMs: Date.now() - start,
         ok: false,
         error: (err as Error).message,
+        effectiveUserId: effectiveAuth.effectiveUserId,
+        impersonatedEmail: effectiveAuth.impersonatedEmail,
       });
     }
     throw err;
@@ -363,14 +495,16 @@ async function invokeWithGuardrails<
   //    is a "structured failure" the LLM should see, not an exception).
   if (auditEnabled) {
     emitAuditRecord({
-      userId: auth.userId,
+      userId: callerUserId,
       orgId: auth.orgId,
       tool: spec.name,
-      args,
+      args: handlerArgs,
       idempotencyKey: idempKey,
       durationMs: Date.now() - start,
       ok: outcome.isError !== true,
       error: outcomeError,
+      effectiveUserId: effectiveAuth.effectiveUserId,
+      impersonatedEmail: effectiveAuth.impersonatedEmail,
     });
   }
   return outcome;

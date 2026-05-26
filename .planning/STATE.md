@@ -115,6 +115,7 @@
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260520-bwa | Live-test `get_order_history` against staging order 57282; bound outbound fetch with 25s AbortSignal + bump route maxDuration; lock live-staging-verification rule into AGENTS.md | 2026-05-20 | 1618a21 | [260520-bwa-live-test-get-order-history-against-stag](./quick/260520-bwa-live-test-get-order-history-against-stag/) |
+| 260525-bwa | Admin impersonation via `on_behalf_of_email` — framework-level parameter injected into all registerTool tools; assertCallerIsAdminOrCsr + lookupClerkUserByEmail helpers; 13 new tests | 2026-05-25 | dd90b2f | [260525-bwa-impersonation-on-behalf-of](./quick/260525-bwa-impersonation-on-behalf-of/) |
 
 ## Session Continuity
 
