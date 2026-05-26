@@ -11,6 +11,7 @@ import { consume } from "@/lib/middleware/rate-limit";
 import {
   ImpersonationForbiddenError,
   assertCallerIsAdminOrCsr,
+  getQuiqupReadyJwt,
   lookupClerkUserByEmail,
 } from "@/lib/quiqup";
 
@@ -301,6 +302,24 @@ export function registerTool<
         effectiveUserId: null,
         impersonatedEmail: null,
       };
+
+      // Pre-warm the Clerk JWT cache using the sessionId embedded in the
+      // inbound OAuth token. Without this, tool handlers that call
+      // getQuiqupReadyJwt(auth.userId) fall through to getSessionList —
+      // which returns empty for merchants who authenticated via OAuth but
+      // have no active Quiqdash (interactive) session, causing a hard failure.
+      //
+      // By awaiting the warm-up here, the cache is populated before any
+      // handler runs. All 100+ tools that call getQuiqupReadyJwt(auth.userId)
+      // hit the cache on their first call and never touch getSessionList.
+      //
+      // Non-fatal: if the warm-up fails (e.g. the OAuth token is already
+      // expired), the handler's own getQuiqupReadyJwt call will surface the
+      // auth error with the same message. We don't rethrow here because the
+      // handler may not need JWT auth (e.g. public reference-data endpoints).
+      if (auth.userId && auth.sessionId) {
+        await getQuiqupReadyJwt(auth.userId, auth.sessionId).catch(() => {});
+      }
 
       return invokeWithGuardrails(spec, auth, args);
     },
