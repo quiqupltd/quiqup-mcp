@@ -64,17 +64,40 @@ const cache = new Map<string, CachedAuth>();
  * Quiqdash login) rather than creating a synthetic one — `createSession` on
  * the Backend API is gated/unavailable in production tenants, and reusing
  * the user's real session keeps our impersonation traceable to a real login.
+ *
+ * `sessionHint` — the Clerk session ID embedded in the inbound OAuth token
+ * (`clerkAuth.sessionId` from `auth({ acceptsToken: "oauth_token" })`).
+ * When provided, the `getSessionList` round-trip is skipped entirely and the
+ * hint session is used directly. This is the mechanism that lets managed-agent
+ * OAuth flows work: a merchant who authenticated via the OAuth authorization
+ * code flow has a valid Clerk session for their OAuth token, but no interactive
+ * Quiqdash session — `getSessionList` would return empty and throw. Passing
+ * the hint routes around that failure without changing any tool handler.
+ *
+ * Callers that don't have a session hint (e.g. the impersonation path, scope
+ * helpers, legacy tools) continue to work via `getSessionList` as before.
  */
-export async function getQuiqupReadyJwt(userId: string): Promise<string> {
+export async function getQuiqupReadyJwt(
+  userId: string,
+  sessionHint?: string | null,
+): Promise<string> {
   const cached = cache.get(userId);
   if (cached && cached.expiresAt > Date.now()) return cached.jwt;
 
-  // Find an existing active session for this user. If they haven't logged
-  // into anything Clerk-protected (Quiqdash, dashboard, etc.) recently,
-  // there'll be no active session and we can't proceed — they need to sign
-  // in first.
-  let sessionId = cached?.sessionId;
+  // Resolution order: cached sessionId > inbound hint > getSessionList.
+  //
+  // The hint path is used by managed-agent OAuth flows where the merchant has
+  // no active interactive Quiqdash session. The sessionId comes from the
+  // validated OAuth token (sid claim) and is forwarded by registerTool's
+  // pre-warm step — so by the time any tool handler calls us, the cache is
+  // already populated and this branch is only hit on the very first call per
+  // request on a cold cache.
+  let sessionId: string | undefined = cached?.sessionId ?? sessionHint ?? undefined;
+
   if (!sessionId) {
+    // No hint and no cached session — fall back to listing active sessions.
+    // Works for Quiqdash (interactive) users. Fails for OAuth-only merchants:
+    // pass `sessionHint` (from registerTool's pre-warm) to avoid this path.
     const sessions = await clerk.sessions.getSessionList({
       userId,
       status: "active",
@@ -82,7 +105,10 @@ export async function getQuiqupReadyJwt(userId: string): Promise<string> {
     });
     if (sessions.data.length === 0) {
       throw new Error(
-        `No active Clerk session for userId ${userId}. Sign into Quiqdash (or any Clerk-protected Quiqup app) first to bootstrap a session, then retry.`,
+        `No active Clerk session for userId ${userId}. ` +
+          `Interactive users: sign into Quiqdash first. ` +
+          `Managed-agent flows: ensure the OAuth sessionId is forwarded via ` +
+          `the registerTool pre-warm (auth.sessionId → getQuiqupReadyJwt hint).`,
       );
     }
     sessionId = sessions.data[0].id;
@@ -94,25 +120,45 @@ export async function getQuiqupReadyJwt(userId: string): Promise<string> {
     const result = await clerk.sessions.getToken(sessionId, SESSION_JWT_TEMPLATE);
     jwt = result.jwt;
   } catch (err) {
-    // The cached session may have been revoked between calls. Re-list and
-    // retry once.
+    // The session may have been revoked between calls. Try to recover:
+    // 1. Re-list active sessions (covers interactive Quiqdash users).
+    // 2. If the list is empty (OAuth-only merchant, no interactive session),
+    //    and the hint differs from the failed sessionId, try the hint once
+    //    more — the OAuth session may have rotated underneath us.
+    // 3. Otherwise rethrow so the caller gets a clear auth error.
     const sessions = await clerk.sessions.getSessionList({
       userId,
       status: "active",
       limit: 1,
     });
-    if (sessions.data.length === 0) {
+
+    let fallbackSessionId: string | undefined = sessions.data[0]?.id;
+
+    if (!fallbackSessionId && sessionHint && sessionHint !== sessionId) {
+      // OAuth-only path: the hint session is different from the one that
+      // failed — try it as a last resort before giving up.
+      fallbackSessionId = sessionHint;
+    }
+
+    if (!fallbackSessionId) {
       throw new Error(
-        `Clerk session ${sessionId} unusable and no replacement active session exists for ${userId}. Underlying: ${(err as Error).message}`,
+        `Clerk session ${sessionId} unusable and no replacement active session exists ` +
+          `for ${userId}. Underlying: ${(err as Error).message}`,
       );
     }
-    sessionId = sessions.data[0].id;
+
+    sessionId = fallbackSessionId;
     const result = await clerk.sessions.getToken(sessionId, SESSION_JWT_TEMPLATE);
     jwt = result.jwt;
   }
 
+  // sessionId is always defined by this point: the try block uses the value
+  // resolved above; the catch block always assigns `fallbackSessionId` before
+  // calling getToken (which would throw if it were undefined). The non-null
+  // assertion makes the narrowing explicit to the type checker.
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
   cache.set(userId, {
-    sessionId,
+    sessionId: sessionId!,
     jwt,
     expiresAt: Date.now() + 50_000,
   });
