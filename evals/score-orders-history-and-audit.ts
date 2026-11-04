@@ -2,7 +2,7 @@
  * Scorers for the Phase-3 Quiqup REST history + Audit family eval
  * (orders-history-and-audit-v1).
  *
- * Six scorers feed Langfuse traces:
+ * Five scorers feed Langfuse traces:
  *
  *   1. tool-name-match (0/1)            — accepts either a single expected
  *      tool name OR an array of acceptable tool names (the dataset has one
@@ -17,23 +17,15 @@
  *   4. description-quality (0..1)       — STATIC; per-tool substring
  *      checklist on production spec.description.
  *
- *   5. audit-no-bearer (0/1)            — STATIC source-inspection;
+ *   5. audit-sends-bearer (0/1)         — STATIC source-inspection;
  *      readFile()s `lib/clients/audit.ts`, STRIPS line + block comments
- *      (the file-header AUTH EXCEPTION block legitimately mentions
- *      "Authorization" and "Bearer" — the comment-strip avoids a false
- *      positive against the very comment that documents the lockdown),
- *      and asserts the comment-stripped source contains ZERO occurrences
- *      of "Authorization" or "Bearer" (case-insensitive).
- *      Locks the AUTH EXCEPTION for the Audit client — the second-ever
- *      auth-exception client in this project after Google Places.
+ *      (so a comment can't satisfy the check), and asserts the
+ *      comment-stripped source still builds an Authorization header with
+ *      a Bearer token. The Audit service requires the caller's Clerk
+ *      token on every read (sc-30350): a client that stops sending it
+ *      breaks order history for everyone.
  *
- *   6. audit-exception-header-present (0/1) — STATIC; readFile()s the
- *      same `lib/clients/audit.ts` and asserts the literal substring
- *      "AUTH EXCEPTION" is present in the file header. Documents the
- *      design intent without locking the exact comment wording.
- *
- * Lenient by design on tool-name + args; STRICT on the auth-exception
- * invariants.
+ * Lenient by design on tool-name + args; STRICT on the auth invariant.
  */
 
 import type { Evaluator } from "@langfuse/client";
@@ -139,12 +131,10 @@ const DESCRIPTION_CHECKS: DescriptionCheck[] = [
       "/events?resourceID.eq={orderUuid}",
       // Cross-tool disambiguation.
       "get_order_history",
-      // Auth-exception language — description MUST tell the LLM the
-      // upstream is no-auth by design (mirrors T-02-29 token omission
-      // and the Phase-1 Google Places auth-isolation precedent). The
-      // production description uses the literal "NO Authorization"
-      // phrasing (see lib/tools/list-order-audit-events.ts).
-      "NO Authorization",
+      // Auth language — description MUST tell the LLM the caller's
+      // Clerk token is forwarded as a Bearer token and that results are
+      // scoped to the caller (see lib/tools/list-order-audit-events.ts).
+      "Bearer token",
       // Canonical example block.
       "Example:",
     ],
@@ -187,30 +177,24 @@ export const descriptionQuality: Evaluator = async () => {
 };
 
 /**
- * STATIC source-inspection: audit-no-bearer.
+ * STATIC source-inspection: audit-sends-bearer.
  *
  * Reads lib/clients/audit.ts, STRIPS line + block comments (the file
- * header LEGITIMATELY mentions "Authorization" and "Bearer" in the AUTH
- * EXCEPTION lockdown block — comment-stripping precisely mirrors the
- * Google Places auth-isolation scorer's approach so the very comment
- * that documents the lockdown does not falsely trip the scorer), and
- * asserts the comment-stripped source contains ZERO occurrences of
- * "Authorization" or "Bearer" (case-insensitive).
+ * header explains the Authorization header, and a comment must not be
+ * able to satisfy the check), and asserts the remaining code builds an
+ * `Authorization` header from a `Bearer ` token.
  *
- * A maintainer cannot land a regression that adds an Authorization
- * header to audit.ts without simultaneously editing this scorer.
- * Mirrors the Phase-1 auth-isolation scorer for Google Places and the
- * Phase-2 token-omission scorer for get-salla-connection.
+ * Inverse of the Google Places auth-isolation scorer: Audit used to be
+ * a no-Bearer client, and requires the caller's Clerk token since
+ * sc-30350. A maintainer cannot drop the header without simultaneously
+ * editing this scorer.
  */
 const AUDIT_CLIENT_SOURCE_PATH = "lib/clients/audit.ts";
 
 /**
  * Strip /* ... *​/ block comments AND // line comments from a TS source
- * string. Deliberately a regex-only pass, not a real TS parser — false
- * positives on string-literal occurrences are accepted (no realistic
- * code-path needs to mention "Authorization" or "Bearer" in a non-import
- * string literal in this client; the unit test catches anything this
- * misses).
+ * string. Deliberately a regex-only pass, not a real TS parser — the
+ * client unit test catches anything this misses.
  */
 function stripComments(source: string): string {
   return source
@@ -218,9 +202,9 @@ function stripComments(source: string): string {
     .replace(/(^|[^:])\/\/.*$/gm, "$1"); // line comments (skip protocol-//-)
 }
 
-const FORBIDDEN_AUTH_SUBSTRINGS = ["authorization", "bearer"] as const;
+const REQUIRED_AUTH_SUBSTRINGS = ["authorization", "bearer "] as const;
 
-export const auditNoBearer: Evaluator = async () => {
+export const auditSendsBearer: Evaluator = async () => {
   const { readFile } = await import("node:fs/promises");
   const path = await import("node:path");
 
@@ -232,7 +216,7 @@ export const auditNoBearer: Evaluator = async () => {
     );
   } catch (err) {
     return {
-      name: "audit-no-bearer",
+      name: "audit-sends-bearer",
       value: 0.0,
       comment: `read failed for ${AUDIT_CLIENT_SOURCE_PATH}: ${(err as Error).message}`,
     };
@@ -240,56 +224,21 @@ export const auditNoBearer: Evaluator = async () => {
 
   const code = stripComments(raw).toLowerCase();
   const failures: string[] = [];
-  for (const sub of FORBIDDEN_AUTH_SUBSTRINGS) {
-    if (code.includes(sub)) {
+  for (const sub of REQUIRED_AUTH_SUBSTRINGS) {
+    if (!code.includes(sub)) {
       failures.push(
-        `${AUDIT_CLIENT_SOURCE_PATH}: must not contain "${sub}" in non-comment code`,
+        `${AUDIT_CLIENT_SOURCE_PATH}: must contain "${sub}" in non-comment code`,
       );
     }
   }
 
   return {
-    name: "audit-no-bearer",
+    name: "audit-sends-bearer",
     value: failures.length === 0 ? 1.0 : 0.0,
     comment:
       failures.length === 0
-        ? "audit.ts (sans comments) is free of Authorization/Bearer references — auth-exception holds"
+        ? "audit.ts (sans comments) sends an Authorization: Bearer header"
         : `failures: ${failures.join("; ")}`,
-  };
-};
-
-/**
- * STATIC source-inspection: audit-exception-header-present.
- *
- * Reads lib/clients/audit.ts and asserts the literal substring
- * "AUTH EXCEPTION" is present. Documents the design intent at the
- * eval-gate level without locking the exact comment wording.
- */
-export const auditExceptionHeaderPresent: Evaluator = async () => {
-  const { readFile } = await import("node:fs/promises");
-  const path = await import("node:path");
-
-  let raw: string;
-  try {
-    raw = await readFile(
-      path.resolve(process.cwd(), AUDIT_CLIENT_SOURCE_PATH),
-      "utf-8",
-    );
-  } catch (err) {
-    return {
-      name: "audit-exception-header-present",
-      value: 0.0,
-      comment: `read failed for ${AUDIT_CLIENT_SOURCE_PATH}: ${(err as Error).message}`,
-    };
-  }
-
-  const present = raw.includes("AUTH EXCEPTION");
-  return {
-    name: "audit-exception-header-present",
-    value: present ? 1.0 : 0.0,
-    comment: present
-      ? `${AUDIT_CLIENT_SOURCE_PATH} contains the AUTH EXCEPTION header — design intent documented`
-      : `${AUDIT_CLIENT_SOURCE_PATH} is missing the "AUTH EXCEPTION" header block`,
   };
 };
 
@@ -298,6 +247,5 @@ export const evaluators = [
   requiredFieldsPresent,
   argsOverlap,
   descriptionQuality,
-  auditNoBearer,
-  auditExceptionHeaderPresent,
+  auditSendsBearer,
 ];

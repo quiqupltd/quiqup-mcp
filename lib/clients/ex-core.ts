@@ -15,7 +15,7 @@
  * the user's Clerk session JWT via getQuiqupReadyJwt and forwards it as
  * the bearer token. Ex-core sits behind the SAME Quiqup gateway as the
  * other Quiqup services — this is NOT an auth-exception client (the only
- * two auth exceptions in this project are Audit and Google Places).
+ * auth exception in this project is Google Places).
  *
  * Error model: HTTP non-2xx maps to ExCoreError carrying status + raw
  * body. Separate error class from QuiqupHttpError because Ex-core is a
