@@ -1,15 +1,15 @@
 /**
  * MSW-mocked Vitest suite for the two Phase-3 / Wave-2 Orders read tools:
  *   - `get_order_history` (ORDS-02) — Quiqup REST host, standard Bearer auth.
- *   - `list_order_audit_events` (ORDS-05) — Audit host, AUTH EXCEPTION (no
- *     Authorization header).
+ *   - `list_order_audit_events` (ORDS-05) — Audit host, Bearer auth (Audit
+ *     requires the caller's Clerk token since sc-30350).
  *
  * Coverage per tool follows the same contract used in
  * `orders-graphql-reads.test.ts` and `auth-account-reads.test.ts`:
  *   - Happy path (text content carries the mocked response shape).
- *   - Boundary-correct auth posture (Bearer present for Quiqup REST; ABSENT
- *     for Audit — locks the auth-exception at the tool layer in addition
- *     to the client-layer lockdown in tests/clients/audit.test.ts).
+ *   - Boundary-correct auth posture (Bearer present for both Quiqup REST
+ *     and Audit — locks it at the tool layer in addition to the
+ *     client-layer lockdown in tests/clients/audit.test.ts).
  *   - Missing `auth.userId` — handler throws before any fetch.
  *   - HTTP non-2xx — surfaces as the appropriate error type.
  *   - Path-param / query-param hygiene.
@@ -287,7 +287,7 @@ describe("list_order_audit_events", () => {
     expect(text).toContain("evt_42");
   });
 
-  it("sends NO Authorization header (tool-level auth-exception lockdown)", async () => {
+  it("forwards the caller's Clerk JWT as a Bearer token (tool-level lockdown)", async () => {
     let capturedHeaders: Headers | null = null;
     server.use(
       http.get(`${AUDIT_PROD}/events`, ({ request }) => {
@@ -304,12 +304,10 @@ describe("list_order_audit_events", () => {
 
     expect(capturedHeaders).not.toBeNull();
     const headers = capturedHeaders as unknown as Headers;
-    // Mirror of the client-level assertion in tests/clients/audit.test.ts —
-    // covers the case where someone "helpfully" adds Bearer headers in the
-    // tool handler itself (e.g. by accidentally minting a JWT and stuffing
-    // it onto the request later).
-    expect(headers.get("Authorization")).toBeNull();
-    expect(headers.get("authorization")).toBeNull();
+    // The mocked getQuiqupReadyJwt returns "test-jwt-for-msw". Audit 401s
+    // any read without a valid token (sc-30350), so the handler must mint
+    // and forward it rather than build a header-less client.
+    expect(headers.get("Authorization")).toBe("Bearer test-jwt-for-msw");
   });
 
   it("appends resourceID.eq with the UUID", async () => {

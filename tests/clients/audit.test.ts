@@ -1,13 +1,10 @@
 /**
- * Dedicated MSW-mocked client test suite for `AuditClient` — the SECOND
- * non-Quiqup-auth client in this server (after Google Places).
+ * Dedicated MSW-mocked client test suite for `AuditClient`.
  *
  * The critical lockdown lives here: the suite asserts that the outbound
- * request carries NO Authorization header at all. This is the structural
- * mirror of `google-places.test.ts`'s "no Authorization header" assertion,
- * which prevents a future "helpfully add a Bearer token" change from
- * silently breaking the upstream contract (source-doc §19 B line 4258 —
- * the Audit service does not understand Clerk session-JWTs).
+ * request carries the caller's Clerk JWT as a Bearer token. Audit rejects
+ * every read without one (sc-30350), so a future "simplification" that
+ * drops the header would break order history for everyone.
  *
  * Per WR-05: AUDIT_BASE_URL AND AUDIT_STAGING_BASE_URL are deleted in
  * beforeEach so a developer with the var set in their shell does not
@@ -46,7 +43,7 @@ afterEach(() => {
 });
 
 describe("AuditClient", () => {
-  it("sends NO Authorization header (auth-exception lockdown)", async () => {
+  it("forwards the caller's JWT as a Bearer token", async () => {
     let capturedHeaders: Headers | null = null;
     server.use(
       http.get(`${AUDIT_PROD}/events`, ({ request }) => {
@@ -55,18 +52,30 @@ describe("AuditClient", () => {
       }),
     );
 
-    const client = new AuditClient();
+    const client = new AuditClient({ jwt: "clerk-session-jwt" });
     await client.request("GET", "/events", {
       query: { "resourceID.eq": "uuid-1" },
     });
 
     expect(capturedHeaders).not.toBeNull();
     const headers = capturedHeaders as unknown as Headers;
-    // Header lookups are case-insensitive in fetch/Headers — assert both
-    // casings as belt-and-braces against a future regression that adds a
-    // Bearer token via a non-canonical header name.
-    expect(headers.get("Authorization")).toBeNull();
-    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("Authorization")).toBe("Bearer clerk-session-jwt");
+    expect(headers.get("Accept")).toBe("application/json");
+  });
+
+  it("surfaces a 401 from Audit as an AuditError", async () => {
+    server.use(
+      http.get(`${AUDIT_PROD}/events`, () =>
+        HttpResponse.json({ message: "Unauthorized" }, { status: 401 }),
+      ),
+    );
+
+    const client = new AuditClient({ jwt: "expired" });
+    await expect(
+      client.request("GET", "/events", {
+        query: { "resourceID.eq": "uuid-1" },
+      }),
+    ).rejects.toMatchObject({ name: "AuditError", status: 401 });
   });
 
   it("appends resourceID.eq via URLSearchParams with dotted key intact", async () => {
@@ -78,7 +87,7 @@ describe("AuditClient", () => {
       }),
     );
 
-    const client = new AuditClient();
+    const client = new AuditClient({ jwt: "test-jwt" });
     const uuid = "6d0c2ad3-4dcf-4e3a-aa72-89e6f6c2a9b5";
     await client.request("GET", "/events", {
       query: { "resourceID.eq": uuid },
@@ -107,7 +116,7 @@ describe("AuditClient", () => {
       http.get(`${AUDIT_PROD}/events`, () => HttpResponse.json(stub)),
     );
 
-    const client = new AuditClient();
+    const client = new AuditClient({ jwt: "test-jwt" });
     const data = await client.request("GET", "/events", {
       query: { "resourceID.eq": "uuid-1" },
     });
@@ -122,7 +131,7 @@ describe("AuditClient", () => {
       ),
     );
 
-    const client = new AuditClient();
+    const client = new AuditClient({ jwt: "test-jwt" });
     let caught: unknown = null;
     try {
       await client.request("GET", "/events", {
@@ -145,7 +154,7 @@ describe("AuditClient", () => {
       }),
     );
 
-    const client = new AuditClient();
+    const client = new AuditClient({ jwt: "test-jwt" });
     await client.request("GET", "/events", {
       query: { "resourceID.eq": "uuid-1" },
     });
@@ -161,7 +170,7 @@ describe("AuditClient", () => {
       }),
     );
 
-    const client = new AuditClient({ environment: "staging" });
+    const client = new AuditClient({ jwt: "test-jwt", environment: "staging" });
     await client.request("GET", "/events", {
       query: { "resourceID.eq": "uuid-1" },
     });
