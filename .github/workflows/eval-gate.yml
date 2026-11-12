@@ -24,9 +24,9 @@ name: Eval Gate
 #     layer.
 #   - orders-graphql, orders-history-and-audit, orders-export,
 #     orders-document-upload — Phase-3 family coverage (added 2026-05-20,
-#     plan 03-05). orders-history-and-audit includes the audit-no-bearer
-#     + audit-exception-header-present STATIC scorers that lock the
-#     second-ever auth-exception client (lib/clients/audit.ts).
+#     plan 03-05). orders-history-and-audit includes the audit-sends-bearer
+#     STATIC scorer that locks the Authorization header on
+#     lib/clients/audit.ts (the Audit service requires it, sc-30350).
 #     orders-export includes the binary-envelope-contract +
 #     csv-date-format-pin STATIC scorers — the binary envelope shape
 #     ({ contentType, base64, filenameHint }) will be reused by Phase 5
@@ -292,7 +292,7 @@ jobs:
         run: bun run eval:orders-graphql
 
   orders-history-and-audit:
-    name: Eval gate — phase3-orders-history-and-audit (2 tools; audit auth-exception locked)
+    name: Eval gate — phase3-orders-history-and-audit (2 tools; audit sends the Clerk bearer)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -306,7 +306,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: "Eval gate — eval:orders-history-and-audit (args-overlap >= 0.7, description-quality >= 1.0, audit-no-bearer >= 1.0, audit-exception-header-present >= 1.0)"
+      - name: "Eval gate — eval:orders-history-and-audit (args-overlap >= 0.7, description-quality >= 1.0, audit-sends-bearer >= 1.0)"
         env:
           EVAL_GATE: "1"
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}

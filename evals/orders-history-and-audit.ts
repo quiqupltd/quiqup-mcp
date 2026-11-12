@@ -11,11 +11,11 @@
  * Drift-proofing: tool descriptions are imported DIRECTLY from each
  * production `spec` (no inline copies — T-01-26 + 02-06 lesson).
  *
- * The score file includes TWO STATIC source-inspection scorers
- * (audit-no-bearer + audit-exception-header-present) that readFile()
- * `lib/clients/audit.ts` and lock the AUTH EXCEPTION at the eval-gate
- * layer — a maintainer cannot land an Authorization header on the Audit
- * client without simultaneously editing this score file.
+ * The score file includes a STATIC source-inspection scorer
+ * (audit-sends-bearer) that readFile()s `lib/clients/audit.ts` and locks
+ * the Authorization header at the eval-gate layer — the Audit service
+ * requires the caller's Clerk token (sc-30350), so a maintainer cannot
+ * drop it from the client without simultaneously editing this score file.
  *
  * Offline: does NOT hit the Quiqup API.
  *
@@ -26,8 +26,8 @@
  * Dry-run: set EVAL_DRY_RUN=1 to print item count and exit.
  *
  * CI gate: set EVAL_GATE=1 to enforce tool-name-match >= 0.75,
- * args-overlap >= 0.7, description-quality >= 1.0, audit-no-bearer >= 1.0,
- * AND audit-exception-header-present >= 1.0 at the end.
+ * args-overlap >= 0.7, description-quality >= 1.0, AND
+ * audit-sends-bearer >= 1.0 at the end.
  *
  * Run: `bun run eval:orders-history-and-audit`
  */
@@ -121,7 +121,7 @@ const task: ExperimentTask<
           "Source: Quiqup REST GET /orders/{id}/history.\n" +
           "  - `list_order_audit_events` → FIELD-LEVEL audit log (who edited " +
           "the address, when, before/after diff). Takes an order UUID. " +
-          "Source: Audit service GET /events (no-auth upstream by design).\n" +
+          "Source: Audit service GET /events.\n" +
           "If the input clearly looks like a small numeric clientOrderID, " +
           "prefer get_order_history. If it's a full UUID, prefer " +
           "list_order_audit_events. " +
@@ -150,9 +150,9 @@ const result = await langfuse.experiment.run({
     `questions, frozen TODAY=${TODAY}. Scored by tool-name-match (accepts ` +
     "array-of-acceptable for the disambiguation prompt), " +
     "required-fields-present (per-tool: order_id / order_uuid), args-overlap, " +
-    "description-quality, audit-no-bearer (STATIC; readFile + comment-strip + " +
-    "assert no Authorization/Bearer in non-comment code of " +
-    "lib/clients/audit.ts), and audit-exception-header-present (STATIC).",
+    "description-quality, and audit-sends-bearer (STATIC; readFile + " +
+    "comment-strip + assert Authorization/Bearer in non-comment code of " +
+    "lib/clients/audit.ts).",
   data: items,
   task,
   evaluators,
@@ -170,7 +170,6 @@ if (process.env.EVAL_GATE === "1") {
     { scoreName: "tool-name-match", min: 0.75 },
     { scoreName: "args-overlap", min: 0.7 },
     { scoreName: "description-quality", min: 1.0 },
-    { scoreName: "audit-no-bearer", min: 1.0 },
-    { scoreName: "audit-exception-header-present", min: 1.0 },
+    { scoreName: "audit-sends-bearer", min: 1.0 },
   ]);
 }

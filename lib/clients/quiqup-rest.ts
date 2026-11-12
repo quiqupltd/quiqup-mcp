@@ -23,8 +23,8 @@
  * quiqup-fulfilment.ts. The handler resolves the user's Clerk session
  * JWT via `getQuiqupReadyJwt` and forwards it as the Bearer token. No
  * Quiqup-side partner secret is stored on this server. This is NOT an
- * auth-exception client — `lib/clients/audit.ts` (the second exception
- * after `google-places.ts`) is where the no-Bearer pattern lives.
+ * auth-exception client — `lib/clients/google-places.ts` is where the
+ * no-Bearer pattern lives.
  *
  * Error model: HTTP non-2xx maps to `QuiqupHttpError` (imported from
  * `quiqup-lastmile.ts`) carrying status + raw body. The single shared

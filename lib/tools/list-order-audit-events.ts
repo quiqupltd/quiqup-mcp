@@ -5,12 +5,10 @@
  * Endpoint: GET {AUDIT_BASE_URL}/events?resourceID.eq={orderUuid} on the
  *   Audit service host (audit.quiqup.com / audit.staging.quiqup.com).
  *
- * AUTH EXCEPTION: This tool's upstream client (`AuditClient` in
- * lib/clients/audit.ts) sends NO Authorization header by upstream design
- * (source-doc §19 B line 4258 — "no auth header — public read or
- * service-internal"). The MCP boundary STILL requires a signed-in user —
- * see the auth.userId check below — but no JWT is minted. This is the
- * SECOND auth-exception tool in the project after `lookup_google_place`.
+ * Auth: the caller's Clerk session JWT is forwarded to Audit as a Bearer
+ * token, like every other Quiqup-side tool (see lib/clients/audit.ts). Audit
+ * scopes the result: Quiqup staff see every event, merchants only events for
+ * their own account's orders.
  *
  * Disambiguation: this tool returns the FIELD-LEVEL audit log (who edited
  * the address, when, before/after values, etc). For the STATE-TRANSITION
@@ -22,6 +20,7 @@
 import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { AuditClient } from "@/lib/clients/audit";
+import { getQuiqupReadyJwt } from "@/lib/quiqup";
 import { environmentField } from "@/lib/clients/quiqup-env";
 
 const inputSchema = z.object({
@@ -55,34 +54,31 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     "payload shapes. " +
     "PII warning: Audit records contain `actor.email`. Surfacing them is " +
     "expected; M6 audit-log redaction handles the at-rest layer. " +
-    "Auth posture: This tool reaches an upstream that sends NO Authorization " +
-    "header (Audit service is no-auth by upstream design). The MCP transport " +
-    "still requires a signed-in user — the Clerk gate at route.ts is what " +
-    "restricts who can call this tool. Do not pass any `token`, `bearer`, or " +
-    "`jwt` fields — the tool surface deliberately has none. " +
-    "Error modes: 4xx from Audit → upstream config issue (wrong base URL? " +
-    "AUDIT_BASE_URL env var unset in this environment?); 5xx → upstream " +
-    "temporarily unavailable. " +
+    "Auth posture: the signed-in user's Clerk session token is forwarded to " +
+    "Audit as a Bearer token. Audit scopes the result to the caller: Quiqup " +
+    "staff see every order's events, merchants only their own account's, so " +
+    "an order that belongs to someone else returns an empty `events` list. " +
+    "Do not pass any `token`, `bearer`, or `jwt` fields — the tool surface " +
+    "deliberately has none. " +
+    "Error modes: 401 → the session token is missing or invalid (run " +
+    "`whoami_platform` to confirm the JWT resolves); 403 → the user is " +
+    "neither Quiqup staff nor linked to an account; other 4xx → upstream " +
+    "config issue (wrong base URL? AUDIT_BASE_URL env var unset in this " +
+    "environment?); 5xx → upstream temporarily unavailable. " +
     'Example: `{ "order_uuid": "6d0c2ad3-4dcf-4e3a-aa72-89e6f6c2a9b5", "environment": "production" }`.',
   inputSchema,
   outputSchema,
   handler: async (auth, args) => {
-    // MCP-boundary auth gate. Even though the Audit upstream is no-auth by
-    // upstream design (see lib/clients/audit.ts file header), the MCP itself
-    // still requires a Clerk-authenticated user. The Audit service's no-auth
-    // posture is a server-internal artefact; the MCP enforces tenant isolation
-    // at the Clerk boundary.
     if (!auth.userId) {
       throw new Error(
         "list_order_audit_events requires an authenticated user",
       );
     }
 
-    // We intentionally do NOT mint a Clerk → Quiqup session-JWT here — the
-    // Audit upstream sends no Authorization header (see file header AUTH
-    // EXCEPTION). The auth.userId check above is the only auth gate; a JWT
-    // we then throw away would be wasteful and misleading.
-    const client = new AuditClient({ environment: args.environment });
+    // Same V3b same-IdP exchange as the other Quiqup-side tools: Audit
+    // verifies the Clerk "default" template token that Quiqdash sends too.
+    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const client = new AuditClient({ jwt, environment: args.environment });
 
     // Dotted query-key (resourceID.eq) per source-doc §19 B line 4259.
     // URLSearchParams round-trips the literal `.` intact.
