@@ -54,7 +54,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     "When to use which: `list_order_audit_events` is the better default for " +
     "'who did X to this order' — it also captures state-transition events " +
     "(e.g. `marked_as_ready_for_collection`, `marked_as_cancelled`) with full " +
-    "actor info, lives on a faster upstream (Audit service), and is " +
+    "actor info and field-level before/after diffs (Audit service), and is " +
     "more reliable than this endpoint. Reach for `get_order_history` " +
     "specifically when you need the state-transition-specific metadata that " +
     "the Audit service does not carry: `on_hold_reason`, " +
