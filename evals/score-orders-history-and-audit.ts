@@ -202,7 +202,11 @@ function stripComments(source: string): string {
     .replace(/(^|[^:])\/\/.*$/gm, "$1"); // line comments (skip protocol-//-)
 }
 
-const REQUIRED_AUTH_SUBSTRINGS = ["authorization", "bearer "] as const;
+// The header assignment must appear on ONE line of non-comment code
+// (`Authorization: \`Bearer ${...}\``). Checking for the two words anywhere
+// in the file would pass on unrelated identifiers like `authorizationKey` +
+// `"bearer x"` while the client sends no header at all.
+const AUTH_HEADER_LINE = /authorization["']?\s*:\s*[`"']bearer \$\{/;
 
 export const auditSendsBearer: Evaluator = async () => {
   const { readFile } = await import("node:fs/promises");
@@ -224,12 +228,10 @@ export const auditSendsBearer: Evaluator = async () => {
 
   const code = stripComments(raw).toLowerCase();
   const failures: string[] = [];
-  for (const sub of REQUIRED_AUTH_SUBSTRINGS) {
-    if (!code.includes(sub)) {
-      failures.push(
-        `${AUDIT_CLIENT_SOURCE_PATH}: must contain "${sub}" in non-comment code`,
-      );
-    }
+  if (!code.split("\n").some((line) => AUTH_HEADER_LINE.test(line))) {
+    failures.push(
+      `${AUDIT_CLIENT_SOURCE_PATH}: no non-comment line builds an Authorization: \`Bearer \${...}\` header`,
+    );
   }
 
   return {

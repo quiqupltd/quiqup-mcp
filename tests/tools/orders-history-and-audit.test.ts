@@ -310,6 +310,30 @@ describe("list_order_audit_events", () => {
     expect(headers.get("Authorization")).toBe("Bearer test-jwt-for-msw");
   });
 
+  it("surfaces a getQuiqupReadyJwt failure and never calls Audit", async () => {
+    let called = false;
+    server.use(
+      http.get(`${AUDIT_PROD}/events`, () => {
+        called = true;
+        return HttpResponse.json({ events: [] });
+      }),
+    );
+    const { getQuiqupReadyJwt } = await import("@/lib/quiqup");
+    vi.mocked(getQuiqupReadyJwt).mockRejectedValueOnce(
+      new Error("Clerk unavailable"),
+    );
+
+    const mod = await import("../../lib/tools/list-order-audit-events");
+    await expect(
+      mod.spec.handler(auth, {
+        order_uuid: "6d0c2ad3-4dcf-4e3a-aa72-89e6f6c2a9b5",
+        environment: "production",
+      }),
+    ).rejects.toThrow("Clerk unavailable");
+    // No token, no request: a header-less read would 401 once Audit enforces
+    expect(called).toBe(false);
+  });
+
   it("appends resourceID.eq with the UUID", async () => {
     let capturedUrl: string | null = null;
     server.use(
