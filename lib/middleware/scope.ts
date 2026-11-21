@@ -169,6 +169,7 @@ function extractRows(body: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(body)) return body as Array<Record<string, unknown>>;
   if (body && typeof body === "object") {
     const o = body as Record<string, unknown>;
+    // `results` is the real ex-core v2 envelope; the rest is tolerance.
     for (const key of ["results", "orders", "data", "items"]) {
       if (Array.isArray(o[key])) return o[key] as Array<Record<string, unknown>>;
     }
@@ -194,6 +195,20 @@ export async function assertOrderBelongsToPlatformCaller(
   callerId: string,
   platform: { jwt: string; environment: QuiqupEnvironment },
 ): Promise<void> {
+  await findOwnedPlatformOrder(orderId, callerId, platform);
+}
+
+/**
+ * Same probe, but returns the caller's own order row (numeric `id`, `uuid`,
+ * ...). Used where the uuid is needed too (agent-door `unpool_order`). The
+ * real response is the ex-core v2 envelope
+ * `{ current_page, per_page, results: Order[], total, total_pages }`.
+ */
+export async function findOwnedPlatformOrder(
+  orderId: string,
+  callerId: string,
+  platform: { jwt: string; environment: QuiqupEnvironment },
+): Promise<Record<string, unknown>> {
   const client = new PlatformApiClient({
     jwt: platform.jwt,
     environment: platform.environment,
@@ -217,10 +232,11 @@ export async function assertOrderBelongsToPlatformCaller(
     }
     throw err;
   }
-  const found = extractRows(body).some(
-    (row) => String(row.id) === orderId || row.uuid === orderId,
+  const row = extractRows(body).find(
+    (r) => String(r.id) === orderId || r.uuid === orderId,
   );
-  if (!found) {
+  if (!row) {
     throw new ScopeViolationError("order", orderId, callerId);
   }
+  return row;
 }

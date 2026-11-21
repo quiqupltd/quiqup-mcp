@@ -24,8 +24,8 @@ curl -sS -X POST http://localhost:3000/agent/mcp \
 Things the live calls must settle (each was an assumption in code; see the PR C report):
 
 1. Multi-state filter encoding on `GET /quiqdash/orders` (code sends one comma-joined `filters[state]`).
-2. The list response envelope (code accepts `results` / `orders` / `data` / `items` or a bare array and matches `id` or `uuid`).
-3. Whether `filters[order_id]` accepts an order UUID (needed for `unpool_order` ownership).
+2. The list response envelope (expected ex-core v2: `{current_page, per_page, results, total, total_pages}`; confirm rows carry numeric `id` and `uuid`).
+3. Agent `unpool_order` takes the numeric id and unpools with the row's looked-up uuid (confirmed by coordinator; verify live).
 4. Whether `/me` on a Carol-minted merchant token returns `salesforce_id` and `admin:false, csr:false`.
 5. 201 / 202 `pending_projection` / 422 behaviour of `set_cancelled`.
 
@@ -81,8 +81,8 @@ Things the live calls must settle (each was an assumption in code; see the PR C 
 
 ## unpool_order
 
-- **Change:** unchanged tool, now also served on /agent/mcp; ownership by uuid on platform-api
-- **Request to run:** PUT /quiqdash/missions/unpool/orders/:uuid; ownership GET /quiqdash/orders?filters[order_id]=<uuid>
+- **Change:** agent-door variant: numeric order_id, uuid looked up from the caller's own order row
+- **Request to run:** GET /quiqdash/orders?filters[order_id]=<numeric id> (supplies uuid), then PUT /quiqdash/missions/unpool/orders/<uuid>
 - **Date / Time (UTC):** PENDING
 - **Executed by:** PENDING
 - **Request (verbatim):** PENDING: run by the controller with a staging platform token

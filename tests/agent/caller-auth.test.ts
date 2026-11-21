@@ -27,6 +27,7 @@ import { assertOrderBelongsToUser, ScopeViolationError, ALL_ORDER_STATES } from 
 import {
   assertOrderOwned,
   jwtFor,
+  lookupOwnedOrderRow,
   PlatformEnvironmentMismatchError,
 } from "@/lib/caller-auth";
 
@@ -102,6 +103,32 @@ describe("assertOrderOwned", () => {
     expect(states).toEqual([...ALL_ORDER_STATES]);
     expect(states).toContain("pending");
     expect(states).toContain("cancelled");
+  });
+
+  it("platform caller: the real ex-core v2 envelope { current_page, per_page, results, total, total_pages }", async () => {
+    server.use(
+      http.get(`${PLATFORM}/quiqdash/orders`, () =>
+        HttpResponse.json({
+          current_page: 1,
+          per_page: 1,
+          results: [{ id: 57282, uuid: "u-57282", state: "pending" }],
+          total: 1,
+          total_pages: 1,
+        }),
+      ),
+    );
+    await expect(assertOrderOwned(platformAuth(), "57282")).resolves.toBeUndefined();
+    const row = await lookupOwnedOrderRow(platformAuth(), "57282");
+    expect(row.uuid).toBe("u-57282");
+  });
+
+  it("platform caller: the real envelope with no rows is not ownership", async () => {
+    server.use(
+      http.get(`${PLATFORM}/quiqdash/orders`, () =>
+        HttpResponse.json({ current_page: 1, per_page: 1, results: [], total: 0, total_pages: 0 }),
+      ),
+    );
+    await expect(assertOrderOwned(platformAuth(), "1")).rejects.toBeInstanceOf(ScopeViolationError);
   });
 
   it("platform caller: matches by uuid too (unpool_order passes the uuid)", async () => {

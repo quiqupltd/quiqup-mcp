@@ -41,7 +41,8 @@ Refusals: bad or missing agent label or unknown environment `400`; invalid token
 What an agent can call (an allowlist; every other tool is not registered on this door):
 
 - reads: `find_order_by_id_or_barcode`, `list_partner_cancellation_reasons`
-- writes: `cancel_lastmile_orders_batch` (`reason` required, a name from `list_partner_cancellation_reasons`), `send_orders_for_collection`, `unpool_order`, `repair_integration_orders` (specific order ids only, never a date range)
+- reads for Carol stay native for now: order read-back lists and the repair status poll (`GET /integrations/repair-orders/status`) are NOT exposed here
+- writes: `cancel_lastmile_orders_batch` (`reason` required, a name from `list_partner_cancellation_reasons`), `send_orders_for_collection`, `unpool_order` (takes the numeric order id; the uuid is looked up from your own order list), `repair_integration_orders` (specific order ids only, never a date range)
 
 Guardrails are per merchant: rate limits and idempotency keys use `platform:<salesforceId>`; ownership checks use the merchant's own order list on platform-api; `on_behalf_of_email` and the `environment` argument are not offered; every call, success or failure, writes an `audit:` line with `agent`, `salesforceId` and `environment` (never the token). The tool list for this door is pinned in `evals/snapshots/tool-surface-agent.json`. Live staging evidence for each tool is tracked in [`CALL-LOG.md`](CALL-LOG.md).
 

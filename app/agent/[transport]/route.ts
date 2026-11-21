@@ -28,7 +28,7 @@ import { spec as listPartnerCancellationReasonsSpec } from "@/lib/tools/list-par
 // Order writes (platform-api, merchant routes). Cancel needs a `reason` here.
 import { spec as cancelLastmileOrdersBatchSpec } from "@/lib/tools/cancel-lastmile-orders-batch";
 import { spec as sendOrdersForCollectionSpec } from "@/lib/tools/send-orders-for-collection";
-import { spec as unpoolOrderSpec } from "@/lib/tools/unpool-order";
+import { agentSpec as unpoolOrderAgentSpec } from "@/lib/tools/unpool-order";
 import { agentSpec as repairIntegrationOrdersAgentSpec } from "@/lib/tools/repair-integration-orders";
 
 export const maxDuration = 60;
@@ -40,7 +40,7 @@ const handler = createMcpHandler(
 
     registerAgentTool(server, cancelLastmileOrdersBatchSpec);
     registerAgentTool(server, sendOrdersForCollectionSpec);
-    registerAgentTool(server, unpoolOrderSpec);
+    registerAgentTool(server, unpoolOrderAgentSpec);
     registerAgentTool(server, repairIntegrationOrdersAgentSpec);
   },
   {

@@ -20,7 +20,11 @@
  */
 
 import type { QuiqupEnvironment } from "@/lib/clients/quiqup-env";
-import { assertOrderBelongsToUser, assertOrderBelongsToPlatformCaller } from "@/lib/middleware/scope";
+import {
+  assertOrderBelongsToUser,
+  assertOrderBelongsToPlatformCaller,
+  findOwnedPlatformOrder,
+} from "@/lib/middleware/scope";
 import { getQuiqupReadyJwt } from "@/lib/quiqup";
 import type { AuthContext } from "@/lib/tools/register";
 
@@ -97,4 +101,22 @@ export async function assertOrderOwned(
     throw new Error("assertOrderOwned requires an authenticated user (no userId in auth context).");
   }
   await assertOrderBelongsToUser(orderId, auth.userId);
+}
+
+/**
+ * Platform-token callers only: the caller's own order row for a numeric
+ * client order id (proves ownership and supplies the row's `uuid`).
+ * Throws ScopeViolationError when the order is not in the caller's list.
+ */
+export async function lookupOwnedOrderRow(
+  auth: AuthContext,
+  orderId: string,
+): Promise<Record<string, unknown>> {
+  if (!isPlatformCaller(auth)) {
+    throw new Error("lookupOwnedOrderRow is for platform-token callers only.");
+  }
+  return findOwnedPlatformOrder(orderId, auth.userId ?? "platform:unknown", {
+    jwt: auth.platformJwt as string,
+    environment: auth.platformEnvironment ?? "production",
+  });
 }

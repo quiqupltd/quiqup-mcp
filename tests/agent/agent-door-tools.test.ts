@@ -17,7 +17,7 @@ import { spec as findOrder } from "@/lib/tools/find-order-by-id-or-barcode";
 import { spec as listReasons } from "@/lib/tools/list-partner-cancellation-reasons";
 import { spec as cancel } from "@/lib/tools/cancel-lastmile-orders-batch";
 import { spec as sendForCollection } from "@/lib/tools/send-orders-for-collection";
-import { spec as unpool } from "@/lib/tools/unpool-order";
+import { agentSpec as unpool } from "@/lib/tools/unpool-order";
 import { agentSpec as repair } from "@/lib/tools/repair-integration-orders";
 
 let audit: ReturnType<typeof captureAudit>;
@@ -344,39 +344,104 @@ describe("send_orders_for_collection", () => {
   });
 });
 
-describe("unpool_order on the agent door", () => {
-  it("checks ownership on platform-api (by uuid) then PUTs the unpool route with the token", async () => {
+describe("unpool_order on the agent door (numeric id, uuid looked up)", () => {
+  const rows = (r: Array<Record<string, unknown>>) =>
+    http.get(`${PLATFORM}/quiqdash/orders`, () =>
+      HttpResponse.json({ current_page: 1, per_page: 1, results: r, total: r.length, total_pages: 1 }),
+    );
+
+  it("owned order: unpools with the uuid from the looked-up row, token forwarded", async () => {
     let putAuth: string | null = null;
+    let q: URL | undefined;
     server.use(
-      ownList(["abc"]), // matches uuid "u-abc"? ids are 'abc' -> id 'abc'
-      http.put(`${PLATFORM}/quiqdash/missions/unpool/orders/abc`, ({ request }) => {
+      http.get(`${PLATFORM}/quiqdash/orders`, ({ request }) => {
+        q = new URL(request.url);
+        return HttpResponse.json({
+          current_page: 1,
+          per_page: 1,
+          results: [{ id: 57282, uuid: "11111111-aaaa" }],
+          total: 1,
+          total_pages: 1,
+        });
+      }),
+      http.put(`${PLATFORM}/quiqdash/missions/unpool/orders/11111111-aaaa`, ({ request }) => {
         putAuth = request.headers.get("authorization");
         return HttpResponse.json({ ok: true });
       }),
     );
     const r = await _invokeWithGuardrailsForTests(unpool, platformAuth(), {
-      order_uuid: "abc",
+      order_id: "57282",
       confirm: true,
     });
     expect(r.isError).toBeFalsy();
-    expect(textOf(r as never)).toContain("Unpooled order abc");
+    expect(textOf(r as never)).toContain("uuid 11111111-aaaa");
+    expect(q!.searchParams.get("filters[order_id]")).toBe("57282");
     expect(putAuth).toBe(`Bearer ${TOKEN}`);
   });
 
-  it("not in the merchant's list: refused, no PUT", async () => {
+  it("not owned: refuses and sends nothing", async () => {
     let puts = 0;
     server.use(
-      http.get(`${PLATFORM}/quiqdash/orders`, () => HttpResponse.json({ results: [] })),
+      rows([]),
       http.put(`${PLATFORM}/quiqdash/missions/unpool/orders/:uuid`, () => {
         puts += 1;
         return HttpResponse.json({});
       }),
     );
     const r = await _invokeWithGuardrailsForTests(unpool, platformAuth(), {
-      order_uuid: "zzz",
+      order_id: "999",
       confirm: true,
     });
     expect(r.isError).toBe(true);
+    expect(textOf(r as never)).toContain("not in your order list");
+    expect(puts).toBe(0);
+  });
+
+  it("row without a uuid: refuses and sends nothing", async () => {
+    let puts = 0;
+    server.use(
+      rows([{ id: 57282 }]),
+      http.put(`${PLATFORM}/quiqdash/missions/unpool/orders/:uuid`, () => {
+        puts += 1;
+        return HttpResponse.json({});
+      }),
+    );
+    const r = await _invokeWithGuardrailsForTests(unpool, platformAuth(), {
+      order_id: "57282",
+      confirm: true,
+    });
+    expect(r.isError).toBe(true);
+    expect(textOf(r as never)).toContain("no uuid");
+    expect(puts).toBe(0);
+  });
+
+  it("order_id must be 1 to 12 digits (a uuid is not accepted)", () => {
+    const schema = unpool.inputSchema as z.ZodObject<z.ZodRawShape>;
+    expect(schema.safeParse({ order_id: "57282" }).success).toBe(true);
+    expect(schema.safeParse({ order_id: "1".repeat(12) }).success).toBe(true);
+    expect(schema.safeParse({ order_id: "1".repeat(13) }).success).toBe(false);
+    expect(schema.safeParse({ order_id: "" }).success).toBe(false);
+    expect(schema.safeParse({ order_id: "11111111-aaaa-bbbb" }).success).toBe(false);
+    expect(Object.keys(schema.shape)).not.toContain("order_uuid");
+  });
+
+  it("confirm gate and dry_run (dry run does the lookup but no PUT)", async () => {
+    let puts = 0;
+    server.use(
+      rows([{ id: 5, uuid: "u5" }]),
+      http.put(`${PLATFORM}/quiqdash/missions/unpool/orders/:uuid`, () => {
+        puts += 1;
+        return HttpResponse.json({});
+      }),
+    );
+    const noConfirm = await _invokeWithGuardrailsForTests(unpool, platformAuth(), { order_id: "5" });
+    expect(noConfirm.isError).toBe(true);
+    const dry = await _invokeWithGuardrailsForTests(unpool, platformAuth(), {
+      order_id: "5",
+      confirm: true,
+      dry_run: true,
+    });
+    expect(textOf(dry as never)).toContain('"orderUuid": "u5"');
     expect(puts).toBe(0);
   });
 });
