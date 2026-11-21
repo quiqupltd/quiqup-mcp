@@ -96,6 +96,13 @@ export interface BatchTransitionConfig {
   reasonField?: {
     description: string;
   };
+  /**
+   * JSON key the upstream expects for the id list. Defaults to `order_ids`
+   * (the ex-core / last-mile shape the original ORDT tools use). The merchant
+   * app routes on platform-api (`/quiqdash/orders/batch/set_ready_for_collection`
+   * and `set_cancelled`) take camelCase `orderIds`; set this for those.
+   */
+  bodyKey?: "order_ids" | "orderIds";
 }
 
 // Output schema is shared across every factory instance — these tools
@@ -262,7 +269,9 @@ export function defineBatchTransition(
         jwt,
         environment: args.environment,
       });
-      const body: Record<string, unknown> = { order_ids: args.order_ids };
+      const body: Record<string, unknown> = {
+        [config.bodyKey ?? "order_ids"]: args.order_ids,
+      };
       if (config.reasonField && args.reason !== undefined) {
         body.reason = args.reason;
       }

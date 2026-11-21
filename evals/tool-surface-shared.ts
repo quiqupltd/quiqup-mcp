@@ -71,14 +71,17 @@ async function classifyToolStatus(
     return "enabled";
   }
   const abs = resolve(REPO_ROOT, registration.modulePath);
-  const mod = (await import(abs)) as {
-    spec?: {
-      name?: string;
-      description?: string;
-      handler?: (auth: unknown, args: unknown) => Promise<unknown>;
-    };
-  };
-  const handler = mod.spec?.handler;
+  const mod = (await import(abs)) as Record<
+    string,
+    | {
+        name?: string;
+        description?: string;
+        handler?: (auth: unknown, args: unknown) => Promise<unknown>;
+      }
+    | undefined
+  >;
+  const exported = mod[registration.exportName ?? "spec"];
+  const handler = exported?.handler;
   if (typeof handler !== "function") {
     throw new Error(
       `tool-surface: ${registration.modulePath} exports no spec.handler — ` +
@@ -104,7 +107,7 @@ async function classifyToolStatus(
     // somehow didn't throw the marker, still classify as disabled.
     // Defensive — none of the current 7 hit this path, but it
     // future-proofs against handler refactors that drop the marker.
-    const desc = mod.spec?.description ?? "";
+    const desc = exported?.description ?? "";
     if (desc.includes("DISABLED-PENDING-M6")) {
       return "disabled-pending-m6";
     }
@@ -117,8 +120,11 @@ async function classifyToolStatus(
  * by name so JSON serialisation is byte-identical across runs / OSes —
  * a prerequisite for using the baseline file as a review artifact.
  */
-export async function buildToolSurfaceSnapshot(): Promise<Record<string, ToolStatus>> {
-  const registrations = loadToolRegistrations();
+export async function buildToolSurfaceSnapshot(
+  routePath?: string,
+  options?: { legacy?: boolean },
+): Promise<Record<string, ToolStatus>> {
+  const registrations = loadToolRegistrations(routePath, options);
   const named = await resolveToolNames(registrations);
 
   const pairs: Array<[string, ToolStatus]> = [];

@@ -1,5 +1,5 @@
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
-import { auth } from "@clerk/nextjs/server";
+import { verifyClerkOAuth } from "@/lib/clerk-verify";
 import { registerClaimsDump } from "@/lib/tools/claims-dump";
 import { registerRecentOrders } from "@/lib/tools/recent-orders";
 import { registerTool } from "@/lib/tools/register";
@@ -106,6 +106,7 @@ import { spec as updateProductSpec } from "@/lib/tools/update-product";
 // Disabled-pending-M6: registered for surface coverage; handler throws.
 // Flip on at M6 with scope + audit + idempotency in place.
 import { spec as markReadyForCollectionSpec } from "@/lib/tools/mark-ready-for-collection";
+import { spec as sendOrdersForCollectionSpec } from "@/lib/tools/send-orders-for-collection";
 import { spec as cancelLastmileOrdersBatchSpec } from "@/lib/tools/cancel-lastmile-orders-batch";
 import { spec as removeParcelFromOrderSpec } from "@/lib/tools/remove-parcel-from-order";
 import { spec as adjustStockSpec } from "@/lib/tools/adjust-stock";
@@ -312,6 +313,7 @@ const handler = createMcpHandler(
 
     // -- Disabled pending M6 (scope/audit/idempotency) --
     registerTool(server, markReadyForCollectionSpec);
+    registerTool(server, sendOrdersForCollectionSpec);
     registerTool(server, cancelLastmileOrdersBatchSpec);
     registerTool(server, removeParcelFromOrderSpec);
     registerTool(server, adjustStockSpec);
@@ -391,25 +393,9 @@ const handler = createMcpHandler(
   { basePath: "" },
 );
 
-const authHandler = withMcpAuth(
-  handler,
-  async (_req, bearerToken) => {
-    if (!bearerToken) return undefined;
-
-    const clerkAuth = await auth({ acceptsToken: "oauth_token" });
-    if (!clerkAuth?.subject) return undefined;
-
-    return {
-      token: bearerToken,
-      clientId: clerkAuth.clientId ?? "",
-      scopes: clerkAuth.scopes ?? [],
-      extra: { clerkAuth },
-    };
-  },
-  {
-    required: true,
-    resourceMetadataPath: "/.well-known/oauth-protected-resource",
-  },
-);
+const authHandler = withMcpAuth(handler, verifyClerkOAuth, {
+  required: true,
+  resourceMetadataPath: "/.well-known/oauth-protected-resource",
+});
 
 export { authHandler as GET, authHandler as POST };

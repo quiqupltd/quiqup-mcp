@@ -417,6 +417,19 @@ export function registerTool<
 }
 
 /**
+ * Register a tool on the agent door (`/agent/mcp`): no `on_behalf_of_email`,
+ * no `environment` argument, platform-token callers only. See
+ * RegisterToolOptions.
+ */
+export function registerAgentTool<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  TIn extends z.ZodObject<any>,
+  TOut extends z.ZodTypeAny,
+>(server: McpServer, spec: ToolSpec<TIn, TOut>): void {
+  registerTool(server, spec, { door: "agent" });
+}
+
+/**
  * Inner orchestration: rate-limit → idempotency wrap → handler → error map
  *  → audit emit. Pulled out so unit tests can call it directly without
  * spinning up an McpServer.

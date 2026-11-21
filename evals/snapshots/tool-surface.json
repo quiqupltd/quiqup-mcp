@@ -79,6 +79,7 @@
     "recent_orders": "enabled",
     "remove_parcel_from_order": "enabled",
     "repair_integration_orders": "enabled",
+    "send_orders_for_collection": "enabled",
     "set_at_depot": "enabled",
     "set_collected": "enabled",
     "set_collection_failed": "enabled",

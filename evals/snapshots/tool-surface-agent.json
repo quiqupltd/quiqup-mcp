@@ -1,0 +1,10 @@
+{
+  "tools": {
+    "cancel_lastmile_orders_batch": "enabled",
+    "find_order_by_id_or_barcode": "enabled",
+    "list_partner_cancellation_reasons": "enabled",
+    "repair_integration_orders": "enabled",
+    "send_orders_for_collection": "enabled",
+    "unpool_order": "enabled"
+  }
+}
