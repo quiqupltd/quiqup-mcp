@@ -40,7 +40,7 @@ Refusals: bad or missing agent label or unknown environment `400`; invalid token
 
 What an agent can call (an allowlist; every other tool is not registered on this door):
 
-- reads: `find_order_by_id_or_barcode`, `list_partner_cancellation_reasons`
+- reads: `find_order_by_id_or_barcode`, `list_partner_cancellation_reasons`, `list_inventory`, `get_inventory_by_sku` (fulfilment inventory on platform-api, scoped to the token's own account)
 - reads for Carol stay native for now: order read-back lists and the repair status poll (`GET /integrations/repair-orders/status`) are NOT exposed here
 - writes: `cancel_lastmile_orders_batch` (`reason` required, a name from `list_partner_cancellation_reasons`), `send_orders_for_collection`, `unpool_order` (takes the numeric order id; the uuid is looked up from your own order list), `repair_integration_orders` (specific order ids only, never a date range)
 

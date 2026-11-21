@@ -113,3 +113,27 @@ Things the live calls must settle (each was an assumption in code; see the PR C 
 - **Response (verbatim):** PENDING: run by the controller with a staging platform token
 - **Outcome:** PENDING: run by the controller with a staging platform token
 
+---
+
+## list_inventory
+
+- **Change:** unchanged tool, now also served on /agent/mcp with a platform token (jwtFor path); confirm the route is account-scoped by the token alone
+- **Request to run:** GET /api/fulfilment/inventory?page=1&per_page=5
+- **Date / Time (UTC):** PENDING
+- **Executed by:** PENDING
+- **Request (verbatim):** PENDING: run by the controller with a staging platform token
+- **Response (verbatim):** PENDING: run by the controller with a staging platform token
+- **Outcome:** PENDING: run by the controller with a staging platform token
+
+---
+
+## get_inventory_by_sku
+
+- **Change:** unchanged tool, now also served on /agent/mcp with a platform token (jwtFor path); confirm the route is account-scoped by the token alone
+- **Request to run:** GET /api/fulfilment/inventory/<sku>
+- **Date / Time (UTC):** PENDING
+- **Executed by:** PENDING
+- **Request (verbatim):** PENDING: run by the controller with a staging platform token
+- **Response (verbatim):** PENDING: run by the controller with a staging platform token
+- **Outcome:** PENDING: run by the controller with a staging platform token
+

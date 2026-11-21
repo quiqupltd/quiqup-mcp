@@ -25,6 +25,10 @@ import { registerAgentTool } from "@/lib/tools/register";
 import { spec as findOrderByIdOrBarcodeSpec } from "@/lib/tools/find-order-by-id-or-barcode";
 import { spec as listPartnerCancellationReasonsSpec } from "@/lib/tools/list-partner-cancellation-reasons";
 
+// Inventory reads (fulfilment routes on platform-api, account-scoped by the token).
+import { spec as listInventorySpec } from "@/lib/tools/list-inventory";
+import { spec as getInventoryBySkuSpec } from "@/lib/tools/get-inventory-by-sku";
+
 // Order writes (platform-api, merchant routes). Cancel needs a `reason` here.
 import { spec as cancelLastmileOrdersBatchSpec } from "@/lib/tools/cancel-lastmile-orders-batch";
 import { spec as sendOrdersForCollectionSpec } from "@/lib/tools/send-orders-for-collection";
@@ -37,6 +41,8 @@ const handler = createMcpHandler(
   (server) => {
     registerAgentTool(server, findOrderByIdOrBarcodeSpec);
     registerAgentTool(server, listPartnerCancellationReasonsSpec);
+    registerAgentTool(server, listInventorySpec);
+    registerAgentTool(server, getInventoryBySkuSpec);
 
     registerAgentTool(server, cancelLastmileOrdersBatchSpec);
     registerAgentTool(server, sendOrdersForCollectionSpec);

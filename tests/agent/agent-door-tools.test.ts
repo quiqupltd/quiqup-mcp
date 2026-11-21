@@ -14,6 +14,8 @@ import { _resetForTests as resetRateLimit } from "@/lib/middleware/rate-limit";
 import { PLATFORM, TOKEN, captureAudit, platformAuth, textOf } from "./helpers";
 
 import { spec as findOrder } from "@/lib/tools/find-order-by-id-or-barcode";
+import { spec as listInventory } from "@/lib/tools/list-inventory";
+import { spec as getInventoryBySku } from "@/lib/tools/get-inventory-by-sku";
 import { spec as listReasons } from "@/lib/tools/list-partner-cancellation-reasons";
 import { spec as cancel } from "@/lib/tools/cancel-lastmile-orders-batch";
 import { spec as sendForCollection } from "@/lib/tools/send-orders-for-collection";
@@ -145,6 +147,53 @@ describe("list_partner_cancellation_reasons", () => {
     const r = await _invokeWithGuardrailsForTests(listReasons, platformAuth(), {});
     expect(r.isError).toBe(true);
     expect(textOf(r as never)).toContain("HTTP 403");
+  });
+});
+
+describe("inventory reads on the agent door", () => {
+  it("list_inventory: forwards the token to platform-api, audited with agent + merchant", async () => {
+    let seenAuth: string | null = null;
+    let q: URL | undefined;
+    server.use(
+      http.get(`${PLATFORM}/api/fulfilment/inventory`, ({ request }) => {
+        seenAuth = request.headers.get("authorization");
+        q = new URL(request.url);
+        return HttpResponse.json({ items: [{ sku: "SKU-1", sellable: 4 }] });
+      }),
+    );
+    const r = await _invokeWithGuardrailsForTests(listInventory, platformAuth(), { page: 1, per_page: 5 });
+    expect(r.isError).toBeFalsy();
+    expect(textOf(r as never)).toContain("SKU-1");
+    expect(seenAuth).toBe(`Bearer ${TOKEN}`);
+    expect(q!.searchParams.get("per_page")).toBe("5");
+    expect(audit.records()[0]).toMatchObject({ tool: "list_inventory", agent: "carol", salesforceId: "001ABC", ok: true });
+  });
+
+  it("list_inventory: upstream 500 is an isError result, audited ok:false", async () => {
+    server.use(http.get(`${PLATFORM}/api/fulfilment/inventory`, () => new HttpResponse("boom", { status: 500 })));
+    const r = await _invokeWithGuardrailsForTests(listInventory, platformAuth(), {});
+    expect(r.isError).toBe(true);
+    expect(audit.records()[0]).toMatchObject({ ok: false });
+  });
+
+  it("get_inventory_by_sku: happy path with an encoded sku", async () => {
+    let path = "";
+    server.use(
+      http.get(`${PLATFORM}/api/fulfilment/inventory/:sku`, ({ request }) => {
+        path = new URL(request.url).pathname;
+        return HttpResponse.json({ sku: "A B/1", sellable: 2 });
+      }),
+    );
+    const r = await _invokeWithGuardrailsForTests(getInventoryBySku, platformAuth(), { sku: "A B/1" });
+    expect(textOf(r as never)).toContain("sellable");
+    expect(path).toBe("/api/fulfilment/inventory/A%20B%2F1");
+  });
+
+  it("get_inventory_by_sku: 404 is an isError result", async () => {
+    server.use(http.get(`${PLATFORM}/api/fulfilment/inventory/:sku`, () => new HttpResponse("nf", { status: 404 })));
+    const r = await _invokeWithGuardrailsForTests(getInventoryBySku, platformAuth(), { sku: "X" });
+    expect(r.isError).toBe(true);
+    expect(textOf(r as never)).toContain("HTTP 404");
   });
 });
 
