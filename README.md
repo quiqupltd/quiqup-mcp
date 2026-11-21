@@ -24,6 +24,27 @@ bun run test:integration      # Layer 2 (requires CLERK_SECRET_KEY + RUN_INTEGRA
 
 Layer 3 (end-to-end) is manual: add the deployed URL as a connector in Claude.ai or Claude Code, complete the OAuth flow, call `claims_dump`.
 
+## Agent access
+
+Server agents (Carol, the onboarding agent) use a separate door, **`/agent/mcp`**, instead of the Clerk OAuth `/mcp`. It accepts one thing as the bearer: a merchant's Quiqup **platform token**. Carol mints that token herself (`POST /admin/oauth/actor-token {salesforce_id}`); this server mints nothing, stores no secret, and forwards the token upstream as-is after checking it on platform-api `GET /me`.
+
+Three headers:
+
+| Header | Value |
+|--------|-------|
+| `Authorization` | `Bearer <merchant platform token>` |
+| `X-Quiqup-Agent` | required label, `^[a-z][a-z0-9-]{0,31}$` (e.g. `carol`); appears in every audit record |
+| `X-Quiqup-Environment` | `production` (default) or `staging`; picks the platform-api host for verification and every tool call |
+
+Refusals: bad or missing agent label or unknown environment `400`; invalid token `401`; an admin or CSR token `403` (agents act as exactly one merchant; admin work goes through `/mcp` with a person). A Clerk OAuth token never works here, and a platform token never works on `/mcp`.
+
+What an agent can call (an allowlist; every other tool is not registered on this door):
+
+- reads: `find_order_by_id_or_barcode`, `list_partner_cancellation_reasons`
+- writes: `cancel_lastmile_orders_batch` (`reason` required, a name from `list_partner_cancellation_reasons`), `send_orders_for_collection`, `unpool_order`, `repair_integration_orders` (specific order ids only, never a date range)
+
+Guardrails are per merchant: rate limits and idempotency keys use `platform:<salesforceId>`; ownership checks use the merchant's own order list on platform-api; `on_behalf_of_email` and the `environment` argument are not offered; every call, success or failure, writes an `audit:` line with `agent`, `salesforceId` and `environment` (never the token). The tool list for this door is pinned in `evals/snapshots/tool-surface-agent.json`. Live staging evidence for each tool is tracked in [`CALL-LOG.md`](CALL-LOG.md).
+
 ## Stack
 
 - Next.js 16 App Router + TypeScript + Bun

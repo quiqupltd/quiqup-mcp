@@ -1,5 +1,5 @@
 /**
- * `send_orders_for_collection` — release pending orders to operations via
+ * `send_orders_for_collection`: release pending orders to operations via
  * `PUT /quiqdash/orders/batch/set_ready_for_collection` on platform-api.
  *
  * This is the merchant app's "Mark as ready for collection" action, in bulk

@@ -1,6 +1,7 @@
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import { verifyAgentRequest } from "@/lib/agent-auth";
+import { AGENT_HEADER, AGENT_LABEL_RE, verifyAgentRequest } from "@/lib/agent-auth";
+import { emitAuditRecord } from "@/lib/middleware/audit";
 import { registerAgentTool } from "@/lib/tools/register";
 
 /**
@@ -62,6 +63,21 @@ const authed = withMcpAuth(
 
 async function agentHandler(req: Request): Promise<Response> {
   const result = await verifyAgentRequest(req);
+  if (!result.ok) {
+    // A refused door call is still a call: record it (agent label only if it
+    // is well-formed; never the token, never the raw header value).
+    const label = req.headers.get(AGENT_HEADER)?.trim() ?? "";
+    emitAuditRecord({
+      userId: null,
+      orgId: null,
+      tool: "agent_door_auth",
+      args: {},
+      durationMs: 0,
+      ok: false,
+      error: `door-refused: ${result.status} ${result.error}`,
+      agent: AGENT_LABEL_RE.test(label) ? label : null,
+    });
+  }
   if (result.ok) {
     verified.set(req, result.authInfo);
   } else if (result.status !== 401) {
