@@ -36,7 +36,7 @@
 
 import { z } from "zod";
 import type { ToolSpec } from "./register";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import { QuiqupHttpError } from "@/lib/clients/quiqup-lastmile";
 import { environmentField, getPlatformApiBaseUrl } from "@/lib/clients/quiqup-env";
 import {
@@ -147,7 +147,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     //    Cost: one extra GET; the tool is rate-limited to 3/min anyway. Also
     //    serves as a JWT-bridge exercise (compare 02-REVIEW WR-04: the
     //    previous dry-run path skipped the bridge entirely).
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const platformApiBase = getPlatformApiBaseUrl(args.environment);
 
     const preRes = await fetch(

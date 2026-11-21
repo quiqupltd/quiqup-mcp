@@ -3,7 +3,7 @@ import type { ToolSpec } from "./register";
 import { QuiqupFulfilmentClient } from "@/lib/clients/quiqup-fulfilment";
 import { environmentField } from "@/lib/clients/quiqup-env";
 import { assertSkuBelongsToUser } from "@/lib/middleware/scope";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 // Per skill SKILL.md guardrails: stock adjustments are always sensitive,
 // regardless of sign or magnitude. Zeroing out a real merchant's inventory
@@ -95,7 +95,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     // JSON-RPC error and the audit layer records the violation.
     await assertSkuBelongsToUser(args.sku, auth.userId);
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupFulfilmentClient({ jwt, environment: args.environment });
     // Forward the full args body — the upstream contract takes sku/bucket/
     // delta/reason and may accept additional fields (the schema is

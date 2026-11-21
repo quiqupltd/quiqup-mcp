@@ -36,7 +36,7 @@
 
 import { z } from "zod";
 import type { ToolSpec } from "./register";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import { QuiqupHttpError } from "@/lib/clients/quiqup-lastmile";
 import { environmentField, getPlatformApiBaseUrl, integrationSourceField } from "@/lib/clients/quiqup-env";
 import {
@@ -150,7 +150,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     //    bridge. Without this, an agent could dry-run a delete from a userId
     //    whose `getQuiqupReadyJwt` would actually fail (revoked Clerk session,
     //    mid-token-rotation) and get a green "would_delete" response.
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const platformApiBase = getPlatformApiBaseUrl(args.environment);
 
     // 4. Dry-run short-circuit — runs AFTER confirm + JWT mint (dry_run cannot

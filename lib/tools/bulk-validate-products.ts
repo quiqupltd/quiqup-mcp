@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupFulfilmentClient } from "@/lib/clients/quiqup-fulfilment";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 // M6: enabled. Validation-only — the upstream endpoint does NOT persist
 // products; on success it returns an `upload_id` you then pass to
@@ -41,7 +41,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
   handler: async (auth, args) => {
     if (!auth.userId)
       throw new Error("bulk_validate_products requires an authenticated user");
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupFulfilmentClient({ jwt, environment: args.environment });
     const data = await client.request(
       "POST",

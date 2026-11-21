@@ -37,6 +37,8 @@
 
 import { QuiqupHttpError, QuiqupLastmileClient } from "@/lib/clients/quiqup-lastmile";
 import { QuiqupFulfilmentClient } from "@/lib/clients/quiqup-fulfilment";
+import { PlatformApiClient } from "@/lib/clients/platform-api";
+import type { QuiqupEnvironment } from "@/lib/clients/quiqup-env";
 import { getQuiqupReadyJwt } from "@/lib/quiqup";
 
 /**
@@ -119,5 +121,106 @@ export async function assertSkuBelongsToUser(
       throw new ScopeViolationError("sku", sku, userId);
     }
     throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Platform-token callers (`/agent/mcp`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every order state the platform order list knows about. The platform list
+ * hides `pending` orders unless a state filter is sent, so the ownership
+ * probe names every state to see the caller's order whatever state it is in.
+ * Source: docs/quiqup-api/references/lastmile.md "Order states".
+ */
+export const ALL_ORDER_STATES = [
+  "pending",
+  "ready_for_collection",
+  "out_for_collection",
+  "collected",
+  "received_at_depot",
+  "out_for_delivery",
+  "delivery_complete",
+  "collection_failed",
+  "delivery_failed",
+  "return_to_origin",
+  "out_for_return",
+  "returned_to_origin",
+  "cancelled",
+  "on_hold",
+  "at_depot",
+  "scheduled",
+  "transit",
+] as const;
+
+/** Today's date in Dubai (UTC+4, no DST) as YYYY-MM-DD. */
+function dubaiToday(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Dubai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+/** Pull the row array out of the list response, whatever the envelope. */
+function extractRows(body: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(body)) return body as Array<Record<string, unknown>>;
+  if (body && typeof body === "object") {
+    const o = body as Record<string, unknown>;
+    for (const key of ["results", "orders", "data", "items"]) {
+      if (Array.isArray(o[key])) return o[key] as Array<Record<string, unknown>>;
+    }
+  }
+  return [];
+}
+
+/**
+ * Ownership check for platform-token callers. The token only ever sees its
+ * own merchant's orders on platform-api, so "the order shows up in the
+ * caller's own list" is the proof of ownership.
+ *
+ *   GET /quiqdash/orders?version=v2&page=1&per_page=1&from=2020-01-01
+ *       &to=<Dubai today>&filters[order_id]=<id>&filters[state]=<all states>
+ *
+ * Fails closed: an unrecognised response shape, or a row whose id/uuid does
+ * not equal the requested id, counts as "not owned". A 404 from the list
+ * (should not happen) is also a violation; every other upstream error
+ * propagates unchanged.
+ */
+export async function assertOrderBelongsToPlatformCaller(
+  orderId: string,
+  callerId: string,
+  platform: { jwt: string; environment: QuiqupEnvironment },
+): Promise<void> {
+  const client = new PlatformApiClient({
+    jwt: platform.jwt,
+    environment: platform.environment,
+  });
+  let body: unknown;
+  try {
+    body = await client.request("GET", "/quiqdash/orders", {
+      query: {
+        version: "v2",
+        page: 1,
+        per_page: 1,
+        from: "2020-01-01",
+        to: dubaiToday(),
+        "filters[order_id]": orderId,
+        "filters[state]": ALL_ORDER_STATES.join(","),
+      },
+    });
+  } catch (err) {
+    if (err instanceof QuiqupHttpError && err.status === 404) {
+      throw new ScopeViolationError("order", orderId, callerId);
+    }
+    throw err;
+  }
+  const found = extractRows(body).some(
+    (row) => String(row.id) === orderId || row.uuid === orderId,
+  );
+  if (!found) {
+    throw new ScopeViolationError("order", orderId, callerId);
   }
 }

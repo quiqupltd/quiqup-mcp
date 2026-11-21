@@ -52,7 +52,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { OrdersCoreRestClient } from "@/lib/clients/orders-core-rest";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 const MAX_FILE_BASE64_CHARS = 13_500_000;
 
@@ -180,7 +180,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     const documentType = args.document_type ?? "proof_of_delivery";
     const adminOverride = args.admin_override ?? true;
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
 
     const fileBytes = Buffer.from(args.file_base64, "base64");
     const fd = new FormData();

@@ -62,7 +62,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import {
   destructiveConfirmField,
   destructiveDryRunField,
@@ -72,9 +72,9 @@ import {
   buildConfirmationRequiredResult,
 } from "@/lib/middleware/destructive";
 import {
-  assertOrderBelongsToUser,
   ScopeViolationError,
 } from "@/lib/middleware/scope";
+import { assertOrderOwned } from "@/lib/caller-auth";
 
 export interface BatchTransitionConfig {
   /** MCP tool name, snake_case (e.g. "set_collected"). */
@@ -204,7 +204,7 @@ export function defineBatchTransition(
       const denied: string[] = [];
       for (const id of args.order_ids) {
         try {
-          await assertOrderBelongsToUser(id, auth.userId);
+          await assertOrderOwned(auth, id, args.environment);
         } catch (err) {
           if (err instanceof ScopeViolationError) {
             denied.push(id);
@@ -257,7 +257,7 @@ export function defineBatchTransition(
       }
 
       // 5. Real PUT. Mint JWT → PlatformApiClient → body assembly.
-      const jwt = await getQuiqupReadyJwt(auth.userId);
+      const jwt = await jwtFor(auth, args.environment);
       const client = new PlatformApiClient({
         jwt,
         environment: args.environment,

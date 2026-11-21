@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupHttpError, QuiqupLastmileClient } from "@/lib/clients/quiqup-lastmile";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 // `order_id` is a string at the input boundary because URL path components
 // are always strings — even though the Quiqup response shape carries `id`
@@ -42,7 +42,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
 
     // V3b same-IdP exchange: mint a Quiqup-shaped JWT from the Clerk userId
     // (mocked in tests via vi.mock("@/lib/quiqup")).
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupLastmileClient({ jwt, environment: args.environment });
 
     let response: { order: unknown };

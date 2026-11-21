@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { QuiqupHttpError } from "@/lib/clients/quiqup-lastmile";
+import type { QuiqupEnvironment } from "@/lib/clients/quiqup-env";
 import { emitAuditRecord } from "@/lib/middleware/audit";
 import {
   getOrSet,
@@ -53,6 +54,19 @@ export interface AuthContext {
    * handler logging if needed. Null / absent when not impersonating.
    */
   impersonatedEmail?: string | null;
+  /**
+   * Platform-token callers only (`/agent/mcp`): the merchant's Quiqup
+   * platform token, already validated on platform-api `/me`, forwarded
+   * upstream as-is by `jwtFor`. SENSITIVE like `bearerToken`; never logged
+   * and never passed to the audit redactor. Null / absent for Clerk callers.
+   */
+  platformJwt?: string | null;
+  /** Environment the platform token was verified against (header-selected). */
+  platformEnvironment?: QuiqupEnvironment | null;
+  /** Agent label from the `X-Quiqup-Agent` header (e.g. "carol"). */
+  agent?: string | null;
+  /** The merchant's Salesforce id from `/me`; `userId` is `platform:<this>`. */
+  salesforceId?: string | null;
 }
 
 /**
@@ -244,25 +258,46 @@ const ON_BEHALF_OF_FIELD = z
 // handlers receive raw `Record<string, unknown>` and the type promise is a
 // lie. Verify mcp-handler's actual behavior (one wrapper-level test that
 // pokes a registered tool with bad args). Flagged in 2026-05-03 review.
+export interface RegisterToolOptions {
+  /**
+   * "agent" = the `/agent/mcp` door (Quiqup platform-token callers only).
+   * The door differs from `/mcp` in three ways, all enforced here:
+   *   - `on_behalf_of_email` is NOT offered (agents act as one merchant);
+   *   - `environment` is NOT offered (the `X-Quiqup-Environment` header the
+   *     token was verified against decides it; see `invokeWithGuardrails`);
+   *   - a call without platform-token auth is refused, never run as Clerk.
+   */
+  door?: "agent";
+}
+
 export function registerTool<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TIn extends z.ZodObject<any>,
   TOut extends z.ZodTypeAny,
->(server: McpServer, spec: ToolSpec<TIn, TOut>): void {
+>(
+  server: McpServer,
+  spec: ToolSpec<TIn, TOut>,
+  options: RegisterToolOptions = {},
+): void {
+  const agentDoor = options.door === "agent";
+  // The SDK expects a raw {field: ZodType} shape map, not a wrapped
+  // z.object(...). We carry the wrapped form on the spec for ergonomic
+  // .safeParse() in tests; .shape unwraps it for the SDK.
+  // ON_BEHALF_OF_FIELD is injected on `/mcp` so every registered tool gains
+  // the impersonation parameter without any per-tool changes; the agent door
+  // drops it (and `environment`) instead.
+  const shape: Record<string, z.ZodTypeAny> = { ...spec.inputSchema.shape };
+  if (agentDoor) {
+    delete shape.environment;
+  } else {
+    shape.on_behalf_of_email = ON_BEHALF_OF_FIELD;
+  }
   server.registerTool(
     spec.name,
     {
       title: spec.name,
       description: spec.description,
-      // The SDK expects a raw {field: ZodType} shape map, not a wrapped
-      // z.object(...). We carry the wrapped form on the spec for ergonomic
-      // .safeParse() in tests; .shape unwraps it for the SDK.
-      // ON_BEHALF_OF_FIELD is injected here so every registered tool gains
-      // the impersonation parameter without any per-tool changes.
-      inputSchema: {
-        ...spec.inputSchema.shape,
-        on_behalf_of_email: ON_BEHALF_OF_FIELD,
-      },
+      inputSchema: shape,
     },
     async (
       args: Record<string, unknown>,
@@ -275,6 +310,60 @@ export function registerTool<
       },
     ) => {
       const authInfo = extra.authInfo;
+      const platform = (
+        authInfo?.extra as
+          | {
+              platform?: {
+                jwt?: string;
+                environment?: QuiqupEnvironment;
+                salesforceId?: string;
+                agent?: string;
+              };
+            }
+          | undefined
+      )?.platform;
+
+      // Door/identity consistency, fail closed in both directions: the agent
+      // door only ever runs platform-token callers, and `/mcp` never does.
+      if (agentDoor !== Boolean(platform)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: agentDoor
+                ? "Refused: /agent/mcp requires a Quiqup platform token."
+                : "Refused: platform tokens are not accepted on /mcp. Use /agent/mcp.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (platform) {
+        if (!platform.jwt || !platform.salesforceId || !platform.environment) {
+          throw new Error("agent auth context is incomplete (jwt, salesforceId, environment)");
+        }
+        const platformAuth: AuthContext = {
+          // Stable per-merchant caller id: rate-limit and idempotency keys
+          // are built from `userId`, so limits are per merchant, not shared
+          // across every merchant a server agent acts for.
+          userId: `platform:${platform.salesforceId}`,
+          orgId: null,
+          sessionId: null,
+          scopes: authInfo?.scopes ?? [],
+          bearerToken: authInfo?.token ?? null,
+          effectiveUserId: null,
+          impersonatedEmail: null,
+          platformJwt: platform.jwt,
+          platformEnvironment: platform.environment,
+          agent: platform.agent ?? null,
+          salesforceId: platform.salesforceId,
+        };
+        // No Clerk session exists for platform-token callers: skip the
+        // Clerk JWT pre-warm entirely.
+        return invokeWithGuardrails(spec, platformAuth, args);
+      }
+
       // TODO(M6): unsafe type cast on extra.authInfo.extra — if Clerk
       // changes the shape under us, this silently produces null userId and
       // handlers proceed thinking they're unauthenticated. Add a runtime
@@ -311,7 +400,8 @@ export function registerTool<
       //
       // By awaiting the warm-up here, the cache is populated before any
       // handler runs. All 100+ tools that call getQuiqupReadyJwt(auth.userId)
-      // hit the cache on their first call and never touch getSessionList.
+      // (now via `jwtFor`) hit the cache on their first call and never touch
+      // getSessionList.
       //
       // Non-fatal: if the warm-up fails (e.g. the OAuth token is already
       // expired), the handler's own getQuiqupReadyJwt call will surface the
@@ -345,8 +435,24 @@ async function invokeWithGuardrails<
   args: Record<string, unknown>,
 ): Promise<{ content: ContentBlock[]; isError?: boolean }> {
   const guardrails = spec.guardrails;
-  const auditEnabled = guardrails ? guardrails.audit !== false : false;
+  const platformCaller = Boolean(auth.platformJwt);
+  // Agent-door calls are ALWAYS audited, success or failure, whatever the
+  // tool's own `guardrails.audit` says (even read tools with no guardrails
+  // block): a server agent acting for merchants needs a complete trail.
+  const auditEnabled = platformCaller
+    ? true
+    : guardrails
+      ? guardrails.audit !== false
+      : false;
   const start = Date.now();
+  // Who and where, added to every audit record of an agent-door call.
+  const auditWho = platformCaller
+    ? {
+        agent: auth.agent ?? null,
+        salesforceId: auth.salesforceId ?? null,
+        environment: auth.platformEnvironment ?? null,
+      }
+    : {};
 
   // 0. Impersonation gate — must run BEFORE rate-limit so the composite
   //    rate-limit key uses the CALLER's userId, not the target's. Admin/CSR
@@ -360,6 +466,33 @@ async function invokeWithGuardrails<
   //      - `on_behalf_of_email` stripped from args before handler call
   const callerUserId = auth.userId;
   let effectiveAuth = auth;
+
+  // Platform-token callers never impersonate: an agent acts as exactly the
+  // one merchant its token belongs to. The agent door does not offer the
+  // field; this refusal covers a caller that sends it anyway.
+  if (platformCaller && "on_behalf_of_email" in args) {
+    emitAuditRecord({
+      userId: callerUserId,
+      orgId: auth.orgId,
+      tool: spec.name,
+      args,
+      durationMs: Date.now() - start,
+      ok: false,
+      error: "on_behalf_of_email-refused-for-platform-token",
+      ...auditWho,
+    });
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text:
+            "on_behalf_of_email is not supported on /agent/mcp: an agent acts only " +
+            "as the merchant its platform token belongs to.",
+        },
+      ],
+      isError: true,
+    };
+  }
   const rawOnBehalfOf =
     typeof args.on_behalf_of_email === "string"
       ? args.on_behalf_of_email.trim()
@@ -415,6 +548,12 @@ async function invokeWithGuardrails<
   // (which may be referenced by the idempotency cache key builder).
   const handlerArgs: Record<string, unknown> = { ...args };
   delete handlerArgs.on_behalf_of_email;
+  // Agent door: `environment` is not an offered argument; the header the
+  // token was verified against decides it. A caller that still passes a
+  // different one reaches `jwtFor`, which refuses the mismatch.
+  if (platformCaller && handlerArgs.environment === undefined) {
+    handlerArgs.environment = auth.platformEnvironment ?? "production";
+  }
 
   // 1. Rate-limit gate. Keyed on the CALLER's userId so admin impersonation
   //    doesn't consume the target's rate-limit budget. Denial returns the
@@ -441,6 +580,7 @@ async function invokeWithGuardrails<
           error: `rate-limited; retry-after ${retryAfter}ms`,
           effectiveUserId: effectiveAuth.effectiveUserId,
           impersonatedEmail: effectiveAuth.impersonatedEmail,
+          ...auditWho,
         });
       }
       return {
@@ -505,6 +645,7 @@ async function invokeWithGuardrails<
         error: (err as Error).message,
         effectiveUserId: effectiveAuth.effectiveUserId,
         impersonatedEmail: effectiveAuth.impersonatedEmail,
+        ...auditWho,
       });
     }
     throw err;
@@ -524,6 +665,7 @@ async function invokeWithGuardrails<
       error: outcomeError,
       effectiveUserId: effectiveAuth.effectiveUserId,
       impersonatedEmail: effectiveAuth.impersonatedEmail,
+      ...auditWho,
     });
   }
   return outcome;

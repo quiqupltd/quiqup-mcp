@@ -2,8 +2,8 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupLastmileClient } from "@/lib/clients/quiqup-lastmile";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
-import { assertOrderBelongsToUser } from "@/lib/middleware/scope";
+import { jwtFor } from "@/lib/caller-auth";
+import { assertOrderOwned } from "@/lib/caller-auth";
 
 // Per references/lastmile.md: DELETE — guardrailed. Cannot remove the last
 // parcel (Quiqup state-machine enforces this and returns 422). Per skill
@@ -42,9 +42,9 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     // mutation. Surfaces foreign-resource attempts as ScopeViolationError
     // (audit-tagged) instead of letting them flow through to the upstream
     // DELETE as an opaque 404 trace.
-    await assertOrderBelongsToUser(args.order_id, auth.userId);
+    await assertOrderOwned(auth, args.order_id, args.environment);
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupLastmileClient({ jwt, environment: args.environment });
     const data = await client.request(
       "DELETE",

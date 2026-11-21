@@ -7,7 +7,7 @@
  *
  * Auth: Standard V3b Clerk → Quiqup session-JWT bridge — IDENTICAL to
  * every other Quiqup-side read tool. The Bearer header is minted by
- * `getQuiqupReadyJwt(auth.userId)`; the handler refuses to run when
+ * `jwtFor(auth, args.environment)`; the handler refuses to run when
  * `auth.userId` is null (BL-04 server-derived identity gate).
  *
  * Disambiguation: this tool returns the STATE-TRANSITION timeline (when
@@ -22,7 +22,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupRestClient } from "@/lib/clients/quiqup-rest";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 const inputSchema = z.object({
   order_id: z
@@ -83,7 +83,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
       throw new Error("get_order_history requires an authenticated user");
     }
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupRestClient({ jwt, environment: args.environment });
 
     // encodeURIComponent for path-param hygiene (T-03-10 — prevents

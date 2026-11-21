@@ -57,6 +57,19 @@ export interface AuditRecord {
    * verbatim for incident investigation. Null / absent when not impersonating.
    */
   impersonatedEmail?: string | null;
+  /**
+   * `/agent/mcp` calls only: the agent label from the `X-Quiqup-Agent`
+   * header (e.g. "carol"). Absent on `/mcp` calls.
+   */
+  agent?: string | null;
+  /**
+   * `/agent/mcp` calls only: the Salesforce id of the merchant the platform
+   * token belongs to (the account acted upon). An identifier, not customer
+   * data. Absent on `/mcp` calls.
+   */
+  salesforceId?: string | null;
+  /** `/agent/mcp` calls only: "production" or "staging". */
+  environment?: string | null;
 }
 
 /** Stable prefix; log-aggregation pipelines match on this verbatim. */
@@ -109,6 +122,9 @@ export function emitAuditRecord(params: {
   error?: string;
   effectiveUserId?: string | null;
   impersonatedEmail?: string | null;
+  agent?: string | null;
+  salesforceId?: string | null;
+  environment?: string | null;
 }): void {
   auditLog({
     ts: new Date().toISOString(),
@@ -122,5 +138,8 @@ export function emitAuditRecord(params: {
     argsRedacted: redactArgs(params.args, params.tool),
     effectiveUserId: params.effectiveUserId,
     impersonatedEmail: params.impersonatedEmail,
+    agent: params.agent,
+    salesforceId: params.salesforceId,
+    environment: params.environment,
   });
 }

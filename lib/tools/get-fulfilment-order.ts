@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupFulfilmentClient } from "@/lib/clients/quiqup-fulfilment";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 // TODO(M4): no cassette, no output schema, no error mapping.
 // Cross-border note: partner_export / non-AE-destination orders may 404 here
@@ -22,7 +22,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
   outputSchema,
   handler: async (auth, args) => {
     if (!auth.userId) throw new Error("get_fulfilment_order requires an authenticated user");
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupFulfilmentClient({ jwt, environment: args.environment });
     const data = await client.request(
       "GET",

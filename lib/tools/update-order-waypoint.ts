@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupLastmileClient } from "@/lib/clients/quiqup-lastmile";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 // TODO(M4): no cassette, no output schema, no error mapping.
 // Update one waypoint (pickup OR drop-off) on a Quiqup last-mile order via
@@ -56,7 +56,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
   handler: async (auth, args) => {
     if (!auth.userId)
       throw new Error("update_order_waypoint requires an authenticated user");
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth);
     const client = new QuiqupLastmileClient({ jwt, baseUrl: EX_API_BASE_URL });
 
     const {

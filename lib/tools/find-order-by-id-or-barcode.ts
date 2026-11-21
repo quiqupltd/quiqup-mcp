@@ -34,7 +34,7 @@
 
 import { z } from "zod";
 import type { ToolSpec } from "./register";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import { environmentField } from "@/lib/clients/quiqup-env";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 
@@ -103,7 +103,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
       throw new Error("find_order_by_id_or_barcode requires an authenticated user");
     }
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     // 03-REVIEW WR-01: migrated from inline fetch boilerplate to the
     // PlatformApiClient helper. The helper handles base-URL resolution,
     // URLSearchParams hygiene, Bearer + Accept headers, and the

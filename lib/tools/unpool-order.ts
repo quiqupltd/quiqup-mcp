@@ -44,7 +44,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import {
   destructiveConfirmField,
   destructiveDryRunField,
@@ -54,9 +54,9 @@ import {
   buildConfirmationRequiredResult,
 } from "@/lib/middleware/destructive";
 import {
-  assertOrderBelongsToUser,
   ScopeViolationError,
 } from "@/lib/middleware/scope";
+import { assertOrderOwned } from "@/lib/caller-auth";
 
 const inputSchema = z.object({
   order_uuid: z
@@ -120,7 +120,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     // 3. Per-order scope assertion. Runs BEFORE the dry-run branch so a
     //    dry-run preview still fails-fast on out-of-scope orders.
     try {
-      await assertOrderBelongsToUser(args.order_uuid, auth.userId);
+      await assertOrderOwned(auth, args.order_uuid, args.environment);
     } catch (err) {
       if (err instanceof ScopeViolationError) {
         return {
@@ -164,7 +164,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     // 5. Real PUT. Mint JWT → PlatformApiClient → empty body (upstream
     //    contract — the path parameter is the only argument). Path is
     //    URL-encoded to lock out path-injection (T-04-10).
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new PlatformApiClient({
       jwt,
       environment: args.environment,

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupFulfilmentClient } from "@/lib/clients/quiqup-fulfilment";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 // Same fix as create_lastmile_order (2026-05-14): wide-open passthrough
 // serialises to `{ properties: {} }` and the LLM sees no field hints, so it
@@ -81,7 +81,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
   outputSchema,
   handler: async (auth, args) => {
     if (!auth.userId) throw new Error("create_fulfilment_order requires an authenticated user");
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupFulfilmentClient({ jwt, environment: args.environment });
     const { environment: _env, ...upstreamBody } = args;
     void _env;

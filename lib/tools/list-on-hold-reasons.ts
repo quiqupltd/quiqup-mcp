@@ -13,7 +13,7 @@
 
 import { z } from "zod";
 import type { ToolSpec } from "./register";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import { QuiqupHttpError } from "@/lib/clients/quiqup-lastmile";
 import { environmentField, getPlatformApiBaseUrl } from "@/lib/clients/quiqup-env";
 
@@ -48,7 +48,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     if (!auth.userId) {
       throw new Error("list_on_hold_reasons requires an authenticated user");
     }
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const platformApiBase = getPlatformApiBaseUrl(args.environment);
     const url = new URL(
       `${platformApiBase}/quiqdash/orders/states/on_hold_reasons`,

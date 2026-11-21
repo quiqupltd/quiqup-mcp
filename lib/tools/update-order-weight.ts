@@ -41,8 +41,8 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
-import { assertOrderBelongsToUser } from "@/lib/middleware/scope";
+import { jwtFor } from "@/lib/caller-auth";
+import { assertOrderOwned } from "@/lib/caller-auth";
 
 const inputSchema = z.object({
   order_id: z
@@ -110,10 +110,10 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
 
     // 2. Per-order scope assertion (T-04-16) — refuse cross-tenant
     //    weight edits BEFORE the PATCH lands.
-    await assertOrderBelongsToUser(args.order_id, auth.userId);
+    await assertOrderOwned(auth, args.order_id, args.environment);
 
     // 3. Mint JWT, build the Platform API client, fire the PATCH.
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new PlatformApiClient({
       jwt,
       environment: args.environment,

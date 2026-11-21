@@ -2,11 +2,11 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupLastmileClient } from "@/lib/clients/quiqup-lastmile";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import {
-  assertOrderBelongsToUser,
   ScopeViolationError,
 } from "@/lib/middleware/scope";
+import { assertOrderOwned } from "@/lib/caller-auth";
 
 // Per references/lastmile.md: cancellation + batch.
 // Upstream contract (validated by evals/lastmile-order-roundtrip.ts):
@@ -54,7 +54,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     const denied: string[] = [];
     for (const id of args.order_ids) {
       try {
-        await assertOrderBelongsToUser(id, auth.userId);
+        await assertOrderOwned(auth, id, args.environment);
       } catch (err) {
         if (err instanceof ScopeViolationError) {
           denied.push(id);
@@ -79,7 +79,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     }
 
     // 2. All ids in scope — fire the batch PUT.
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupLastmileClient({ jwt, environment: args.environment });
     const data = await client.request("PUT", "/orders/batch/set_cancelled", {
       body: { order_ids: args.order_ids },

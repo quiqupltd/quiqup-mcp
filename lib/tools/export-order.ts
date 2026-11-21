@@ -19,7 +19,7 @@
  * Phase-4 / Wave-3 single-order mutation. Direct handler (no factory).
  *
  * Auth: V3b Clerk → Quiqup session-JWT bridge — IDENTICAL to every
- * other Quiqup-side write tool. `getQuiqupReadyJwt(auth.userId)` mints
+ * other Quiqup-side write tool. `jwtFor(auth, args.environment)` mints
  * the Bearer token; the handler refuses to run when `auth.userId` is
  * null (T-04-17 — auth gate runs BEFORE any work).
  *
@@ -39,8 +39,8 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupRestClient } from "@/lib/clients/quiqup-rest";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
-import { assertOrderBelongsToUser } from "@/lib/middleware/scope";
+import { jwtFor } from "@/lib/caller-auth";
+import { assertOrderOwned } from "@/lib/caller-auth";
 
 const inputSchema = z.object({
   order_id: z
@@ -99,10 +99,10 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     //    BEFORE the PUT lands. assertOrderBelongsToUser throws
     //    ScopeViolationError on 404; let it propagate so the registerTool
     //    wrapper renders the canonical scope-violation result.
-    await assertOrderBelongsToUser(args.order_id, auth.userId);
+    await assertOrderOwned(auth, args.order_id, args.environment);
 
     // 3. Mint JWT, build the Quiqup REST client, fire the PUT.
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupRestClient({ jwt, environment: args.environment });
 
     // encodeURIComponent for path-param hygiene (T-04-18 — prevents

@@ -19,7 +19,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupLastmileClient } from "@/lib/clients/quiqup-lastmile";
 import { ENVIRONMENT_DESCRIPTION } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 const inputSchema = z.object({
   order_ids: z
@@ -70,7 +70,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
         "set_collection_failed_batch requires an authenticated user",
       );
     }
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupLastmileClient({ jwt, environment: "staging" });
     const data = await client.request("PUT", "/courier/orders/set_collection_failed", {
       body: {

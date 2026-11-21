@@ -52,7 +52,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 const MAX_CSV_BASE64_CHARS = 13_500_000;
 
@@ -142,7 +142,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
       "_",
     );
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
 
     const csvBytes = Buffer.from(args.csv_base64, "base64");
     const fd = new FormData();
