@@ -43,7 +43,7 @@
 
 import { z } from "zod";
 import type { ToolSpec } from "./register";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import { environmentField } from "@/lib/clients/quiqup-env";
 import { OrdersCoreGraphQLClient } from "@/lib/clients/orders-core-graphql";
 
@@ -145,7 +145,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
       throw new Error("bulk_orders_lookup requires an authenticated user");
     }
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new OrdersCoreGraphQLClient({
       jwt,
       environment: args.environment,

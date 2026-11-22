@@ -28,7 +28,7 @@
 
 import { z } from "zod";
 import type { ToolSpec } from "./register";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import { QuiqupHttpError } from "@/lib/clients/quiqup-lastmile";
 import { environmentField, getPlatformApiBaseUrl, integrationSourceField } from "@/lib/clients/quiqup-env";
 
@@ -133,7 +133,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
       );
     }
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const platformApiBase = getPlatformApiBaseUrl(args.environment);
 
     // Build the upstream body from input fields only — explicitly omit
@@ -166,6 +166,98 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
       throw new QuiqupHttpError(res.status, await res.text());
     }
 
+    const data = await res.json();
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+    };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Agent door (`/agent/mcp`) variant
+// ---------------------------------------------------------------------------
+//
+// Same upstream route, narrower contract, for server agents acting as one
+// merchant (route facts: briefs/f28-write-routes.md, "Re-push a failed store
+// order"):
+//   - specific ids only. NO date range is accepted or sent, ever.
+//   - `user_id` is NOT sent: the upstream forces the user to the caller (the
+//     token's merchant); `auth.userId` here is `platform:<salesforceId>`,
+//     which is not a platform user id.
+//   - `location_id: 0` is sent explicitly, as the merchant app does.
+//   - `ids` are shop order names ('#1307' / '1307') or Shopify legacy ids
+//     (>= 10 digits). Capped at 10 per call (the /mcp tool allows 50).
+// The upstream is async: it answers { workflow_id, status: "running" }. The
+// outcome is read from GET /integrations/repair-orders/status?workflow_id=...,
+// which no agent-door tool exposes yet (see the PR C report).
+
+const agentInputSchema = z.object({
+  ids: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(10)
+    .describe(
+      "Specific store order ids to re-push: the shop order name ('#1307' or '1307') " +
+        "or the Shopify legacy id (10+ digits). 1 to 10 per call. Never a date range.",
+    ),
+  source: integrationSourceField.describe(
+    "Store platform the orders came from: shopify, woocommerce or salla.",
+  ),
+  shop_name: z.string().min(1).optional().describe("Shop name, when the merchant has several shops."),
+  site_url: z
+    .string()
+    .optional()
+    .describe("Storefront URL of the shop, e.g. https://acme.myshopify.com (WooCommerce / Salla)."),
+  idempotency_key: z
+    .string()
+    .optional()
+    .describe("Optional key: duplicate calls with the same key within 15 minutes return the cached result."),
+  environment: environmentField,
+});
+
+export const agentSpec: ToolSpec<typeof agentInputSchema, typeof outputSchema> = {
+  name: "repair_integration_orders",
+  description:
+    "Re-push specific failed store orders (Shopify, WooCommerce or Salla) to Quiqup via " +
+    "POST /integrations/repair-orders on platform-api, as the merchant. Pass specific order " +
+    "ids only (1 to 10); a date range is not accepted. Safe to repeat: an order that already " +
+    "exists is skipped. The upstream is asynchronous and answers { workflow_id, status: " +
+    '"running" }; the orders are created shortly after, so read them back later rather than ' +
+    "retrying immediately. Rate-limit: 5 calls / minute per merchant.",
+  inputSchema: agentInputSchema,
+  outputSchema,
+  guardrails: {
+    rateLimit: { capacity: 5, refillPerSec: 5 / 60 },
+    idempotency: { keyArg: "idempotency_key", ttlMs: 15 * 60 * 1000 },
+    audit: true,
+  },
+  handler: async (auth, args) => {
+    if (!auth.userId) {
+      throw new Error("repair_integration_orders requires an authenticated user");
+    }
+    const jwt = await jwtFor(auth, args.environment);
+    const platformApiBase = getPlatformApiBaseUrl(args.environment);
+
+    const body: Record<string, unknown> = {
+      source: args.source,
+      ids: args.ids,
+      location_id: 0,
+    };
+    if (args.shop_name) body.shop_name = args.shop_name;
+    if (args.site_url) body.site_url = args.site_url;
+
+    const res = await fetch(`${platformApiBase}/integrations/repair-orders`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new QuiqupHttpError(res.status, await res.text());
+    }
     const data = await res.json();
     return {
       content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],

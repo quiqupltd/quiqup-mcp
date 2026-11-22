@@ -62,7 +62,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import {
   destructiveConfirmField,
   destructiveDryRunField,
@@ -72,9 +72,9 @@ import {
   buildConfirmationRequiredResult,
 } from "@/lib/middleware/destructive";
 import {
-  assertOrderBelongsToUser,
   ScopeViolationError,
 } from "@/lib/middleware/scope";
+import { AGENT_ORDER_ID_RE, assertOrderOwned, nonNumericIdsForAgent } from "@/lib/caller-auth";
 
 export interface BatchTransitionConfig {
   /** MCP tool name, snake_case (e.g. "set_collected"). */
@@ -96,6 +96,19 @@ export interface BatchTransitionConfig {
   reasonField?: {
     description: string;
   };
+  /**
+   * JSON key the upstream expects for the id list. Defaults to `order_ids`
+   * (the ex-core / last-mile shape the original ORDT tools use). The merchant
+   * app routes on platform-api (`/quiqdash/orders/batch/set_ready_for_collection`
+   * and `set_cancelled`) take camelCase `orderIds`; set this for those.
+   */
+  bodyKey?: "order_ids" | "orderIds";
+  /**
+   * Action name sent as `intention` to find_by_id_or_barcode when the agent
+   * door's ownership probe falls back to it (pending drafts the order list
+   * does not show). Omit for no fallback.
+   */
+  intention?: string;
 }
 
 // Output schema is shared across every factory instance — these tools
@@ -146,6 +159,17 @@ export function defineBatchTransition(
       .describe(config.reasonField.description);
   }
   const inputSchema = z.object(baseShape);
+  // Agent door: the same shape with numeric-only order ids.
+  const agentInputSchema = inputSchema.extend({
+    order_ids: z
+      .array(z.string().regex(AGENT_ORDER_ID_RE, "numeric client order id (1 to 12 digits)"))
+      .min(1)
+      .max(10)
+      .describe(
+        "Up to 10 numeric client order ids (digits only). Each id is independently " +
+          "checked against your own order list before the upstream PUT runs.",
+      ),
+  });
 
   const description =
     `DESTRUCTIVE state transition. ${config.description} ` +
@@ -157,6 +181,7 @@ export function defineBatchTransition(
     description,
     inputSchema,
     outputSchema: sharedOutputSchema,
+    agentInputSchema,
     guardrails: {
       rateLimit: { capacity: 3, refillPerSec: 3 / 60 },
       idempotency: { keyArg: "idempotency_key", ttlMs: 15 * 60 * 1000 },
@@ -198,13 +223,30 @@ export function defineBatchTransition(
         throw err;
       }
 
+      // 2b. Agent door: numeric client order ids only (defence in depth; the
+      //     agent schema enforces the same pattern).
+      const badIds = nonNumericIdsForAgent(auth, args.order_ids);
+      if (badIds.length > 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                `${config.name} refused: order ids must be numeric client order ids ` +
+                `(1 to 12 digits); got ${badIds.join(", ")}. No upstream call was attempted.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       // 3. Sequential per-id scope assertion. Collect denials so the
       //    refusal can name every offending id at once (LLM can drop the
       //    bad ids and retry without binary-search).
       const denied: string[] = [];
       for (const id of args.order_ids) {
         try {
-          await assertOrderBelongsToUser(id, auth.userId);
+          await assertOrderOwned(auth, id, args.environment, config.intention);
         } catch (err) {
           if (err instanceof ScopeViolationError) {
             denied.push(id);
@@ -257,12 +299,14 @@ export function defineBatchTransition(
       }
 
       // 5. Real PUT. Mint JWT → PlatformApiClient → body assembly.
-      const jwt = await getQuiqupReadyJwt(auth.userId);
+      const jwt = await jwtFor(auth, args.environment);
       const client = new PlatformApiClient({
         jwt,
         environment: args.environment,
       });
-      const body: Record<string, unknown> = { order_ids: args.order_ids };
+      const body: Record<string, unknown> = {
+        [config.bodyKey ?? "order_ids"]: args.order_ids,
+      };
       if (config.reasonField && args.reason !== undefined) {
         body.reason = args.reason;
       }

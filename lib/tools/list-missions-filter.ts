@@ -18,7 +18,7 @@
 
 import { z } from "zod";
 import type { ToolSpec } from "./register";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import { environmentField } from "@/lib/clients/quiqup-env";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 
@@ -57,7 +57,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
       throw new Error("list_missions_filter requires an authenticated user");
     }
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     // 03-REVIEW WR-01: migrated from inline fetch boilerplate to the
     // PlatformApiClient helper (see lib/clients/platform-api.ts).
     const client = new PlatformApiClient({ jwt, environment: args.environment });

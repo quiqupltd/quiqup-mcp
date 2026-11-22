@@ -38,6 +38,8 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
 const ROUTE_PATH = resolve(REPO_ROOT, "app", "[transport]", "route.ts");
+/** The agent door (`/agent/mcp`); registers via `registerAgentTool`. */
+export const AGENT_ROUTE_PATH = resolve(REPO_ROOT, "app", "agent", "[transport]", "route.ts");
 
 /**
  * Legacy register*() helpers that don't expose a `spec` export. We map
@@ -67,6 +69,8 @@ export interface ToolRegistration {
    * statically enabled.
    */
   modulePath: string | null;
+  /** Named export holding the spec; `spec` unless the route imports `agentSpec`. */
+  exportName?: "spec" | "agentSpec";
 }
 
 /**
@@ -76,20 +80,27 @@ export interface ToolRegistration {
  * appended in `LEGACY_REGISTRATIONS` order. Callers that need a stable
  * snapshot key should sort by `.name` themselves.
  */
-export function loadToolRegistrations(): ToolRegistration[] {
-  const src = readFileSync(ROUTE_PATH, "utf8");
+export function loadToolRegistrations(
+  routePath: string = ROUTE_PATH,
+  { legacy = true }: { legacy?: boolean } = {},
+): ToolRegistration[] {
+  const src = readFileSync(routePath, "utf8");
 
   // Map `<varName>` → `@/lib/tools/<file>` from `import { spec as <varName> } from "..."` lines.
   // Allow whitespace/multiline variations in case route.ts is reformatted.
+  // The agent door imports named exports other than `spec` (e.g. `agentSpec`).
   const importRe =
-    /import\s*\{\s*spec\s+as\s+(\w+)\s*\}\s*from\s*["']@\/lib\/tools\/([^"']+)["']\s*;?/g;
-  const specVarToPath = new Map<string, string>();
+    /import\s*\{\s*(spec|agentSpec)\s+as\s+(\w+)\s*\}\s*from\s*["']@\/lib\/tools\/([^"']+)["']\s*;?/g;
+  const specVarToPath = new Map<string, { path: string; exportName: "spec" | "agentSpec" }>();
   for (const m of src.matchAll(importRe)) {
-    specVarToPath.set(m[1], `lib/tools/${m[2]}`);
+    specVarToPath.set(m[2], {
+      path: `lib/tools/${m[3]}`,
+      exportName: m[1] as "spec" | "agentSpec",
+    });
   }
 
   // Pull every `registerTool(server, <varName>)` call. Whitespace-tolerant.
-  const registerRe = /registerTool\s*\(\s*server\s*,\s*(\w+)\s*\)\s*;?/g;
+  const registerRe = /register(?:Agent)?Tool\s*\(\s*server\s*,\s*(\w+)\s*\)\s*;?/g;
   const registeredVars: string[] = [];
   for (const m of src.matchAll(registerRe)) {
     registeredVars.push(m[1]);
@@ -99,8 +110,8 @@ export function loadToolRegistrations(): ToolRegistration[] {
   // dangling references (registerTool with no matching import) so the
   // failure mode is a clear error, not a silently-skipped tool.
   const specEntries: ToolRegistration[] = registeredVars.map((varName) => {
-    const modulePath = specVarToPath.get(varName);
-    if (!modulePath) {
+    const imported = specVarToPath.get(varName);
+    if (!imported) {
       throw new Error(
         `tool-surface dataset: registerTool(server, ${varName}) in route.ts ` +
           `has no matching \`import { spec as ${varName} } from "@/lib/tools/..."\`. ` +
@@ -111,14 +122,14 @@ export function loadToolRegistrations(): ToolRegistration[] {
     // see `loadToolNames()`. We can't statically know the name here
     // without executing the module, and we want the dataset itself to be
     // import-side-effect-free.
-    return { name: varName, modulePath };
+    return { name: varName, modulePath: imported.path, exportName: imported.exportName };
   });
 
   // Legacy register*() helpers: verify each declared entry is *actually*
   // wired up in route.ts. If a legacy helper is removed from route.ts
   // (e.g. migrated to the spec pattern), this throws so the dataset can't
   // silently advertise a tool that's no longer registered.
-  const legacyEntries: ToolRegistration[] = LEGACY_REGISTRATIONS.map(
+  const legacyEntries: ToolRegistration[] = (legacy ? LEGACY_REGISTRATIONS : []).map(
     ({ registerFn, toolName }) => {
       const callRe = new RegExp(`\\b${registerFn}\\s*\\(\\s*server\\s*\\)`);
       if (!callRe.test(src)) {
@@ -157,8 +168,8 @@ export async function resolveToolNames(
     // absolute for dynamic import. `@/` alias isn't available at runtime
     // outside Next.js, so we go via the filesystem path.
     const abs = resolve(REPO_ROOT, reg.modulePath);
-    const mod = (await import(abs)) as { spec?: { name?: string } };
-    const advertisedName = mod.spec?.name;
+    const mod = (await import(abs)) as Record<string, { name?: string } | undefined>;
+    const advertisedName = mod[reg.exportName ?? "spec"]?.name;
     if (!advertisedName || typeof advertisedName !== "string") {
       throw new Error(
         `tool-surface dataset: ${reg.modulePath} exports no \`spec.name\` (got ${

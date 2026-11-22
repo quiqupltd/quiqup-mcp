@@ -24,7 +24,7 @@
 
 import { z } from "zod";
 import type { ToolSpec } from "./register";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import { QuiqupHttpError } from "@/lib/clients/quiqup-lastmile";
 import { environmentField, getPlatformApiBaseUrl } from "@/lib/clients/quiqup-env";
 
@@ -67,7 +67,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
       throw new Error("install_salla requires an authenticated user");
     }
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const platformApiBase = getPlatformApiBaseUrl(args.environment);
     const res = await fetch(
       `${platformApiBase}/integrations/install/salla`,

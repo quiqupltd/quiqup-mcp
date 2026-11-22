@@ -43,8 +43,8 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupLastmileClient } from "@/lib/clients/quiqup-lastmile";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
-import { assertOrderBelongsToUser } from "@/lib/middleware/scope";
+import { jwtFor } from "@/lib/caller-auth";
+import { assertOrderOwned } from "@/lib/caller-auth";
 
 const inputSchema = z.object({
   order_id: z
@@ -97,13 +97,13 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     //    order is visible under this user's session JWT. Throws
     //    ScopeViolationError on upstream 404, which the audit log will
     //    record verbatim instead of an opaque "order not found".
-    await assertOrderBelongsToUser(args.order_id, auth.userId);
+    await assertOrderOwned(auth, args.order_id, args.environment);
 
     // 2. The actual mutation. We exchange a session JWT and PUT to the
     //    ready_for_collection endpoint. The upstream returns the updated
     //    order envelope; we surface id + state back to the LLM so the
     //    caller can confirm the transition.
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupLastmileClient({ jwt, environment: args.environment });
 
     // QuiqupHttpError from any non-2xx flows up to the registerTool

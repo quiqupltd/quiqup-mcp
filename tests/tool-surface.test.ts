@@ -36,6 +36,7 @@ import {
   buildToolSurfaceSnapshot,
   type ToolStatus,
 } from "../evals/tool-surface-shared";
+import { AGENT_ROUTE_PATH } from "../evals/datasets/tool-surface-v1";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BASELINE_PATH = resolve(HERE, "..", "evals", "snapshots", "tool-surface.json");
@@ -71,5 +72,48 @@ describe("tool-surface snapshot", () => {
       .filter(([, status]) => status === "disabled-pending-m6")
       .map(([name]) => name);
     expect(disabled.sort()).toEqual([]);
+  });
+});
+
+describe("agent door tool-surface snapshot (/agent/mcp)", () => {
+  const AGENT_BASELINE_PATH = resolve(
+    HERE,
+    "..",
+    "evals",
+    "snapshots",
+    "tool-surface-agent.json",
+  );
+
+  it("matches the committed baseline: the allowlist is exactly these tools", async () => {
+    const baseline = (
+      JSON.parse(readFileSync(AGENT_BASELINE_PATH, "utf8")) as {
+        tools: Record<string, ToolStatus>;
+      }
+    ).tools;
+    const current = await buildToolSurfaceSnapshot(AGENT_ROUTE_PATH, {
+      legacy: false,
+    });
+    expect(current).toEqual(baseline);
+  });
+
+  it("never serves admin-style or non-platform tools (recent_orders, claims_dump, mission/state setters, impersonation)", async () => {
+    const current = await buildToolSurfaceSnapshot(AGENT_ROUTE_PATH, {
+      legacy: false,
+    });
+    const names = Object.keys(current);
+    for (const forbidden of [
+      "recent_orders",
+      "claims_dump",
+      "create_lastmile_order",
+      "set_on_hold",
+      "set_delivery_complete",
+      "create_mission",
+      "transfer_mission_orders",
+      "create_order_charge",
+      "update_order_weight",
+      "get_account_by_id",
+    ]) {
+      expect(names).not.toContain(forbidden);
+    }
   });
 });

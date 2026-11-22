@@ -41,7 +41,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import {
   ConfirmationRequiredError,
   buildConfirmationRequiredResult,
@@ -51,7 +51,7 @@ import {
   requireConfirm,
   sanitizeForResourceText,
 } from "@/lib/middleware/destructive";
-import { assertOrderBelongsToUser } from "@/lib/middleware/scope";
+import { assertOrderOwned } from "@/lib/caller-auth";
 
 const inputSchema = z.object({
   order_id: z
@@ -150,7 +150,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     //    Runs BEFORE the dry-run short-circuit so dry-run still
     //    fails-fast on out-of-scope orders (matches batch-factory
     //    semantics).
-    await assertOrderBelongsToUser(args.order_id, auth.userId);
+    await assertOrderOwned(auth, args.order_id, args.environment);
 
     // 4. Dry-run short-circuit (D-03 rich preview). Synthesize a payload
     //    shaped like what the real PATCH would return for a successful
@@ -176,7 +176,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     }
 
     // 5. Real PATCH. Mint JWT, build the Platform API client, fire it.
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new PlatformApiClient({
       jwt,
       environment: args.environment,

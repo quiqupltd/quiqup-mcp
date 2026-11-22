@@ -4,7 +4,7 @@ import { QuiqupFulfilmentClient } from "@/lib/clients/quiqup-fulfilment";
 import { environmentField } from "@/lib/clients/quiqup-env";
 import { QuiqupHttpError } from "@/lib/clients/quiqup-lastmile";
 import { ScopeViolationError } from "@/lib/middleware/scope";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 // Per references/endpoints.md + skill SKILL.md: booking moves real warehouse
 // capacity. Slot is a finite resource — overbooking has cascade effects on
@@ -37,7 +37,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     if (!auth.userId) {
       throw new Error("book_inbound_slot requires an authenticated user");
     }
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupFulfilmentClient({ jwt, environment: args.environment });
 
     // TODO(M7): promote to a typed helper in scope.ts when a third tool needs it.

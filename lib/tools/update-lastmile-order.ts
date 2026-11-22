@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { QuiqupLastmileClient } from "@/lib/clients/quiqup-lastmile";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 // TODO(M4): no cassette, no output schema, no error mapping.
 // Per references/lastmile.md: only `payment_mode` and `payment_amount` are
@@ -32,7 +32,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
   outputSchema,
   handler: async (auth, args) => {
     if (!auth.userId) throw new Error("update_lastmile_order requires an authenticated user");
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new QuiqupLastmileClient({ jwt, environment: args.environment });
     const data = await client.request(
       "PUT",

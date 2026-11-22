@@ -33,7 +33,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { ExCoreClient } from "@/lib/clients/ex-core";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 // yyyy-mm-dd format is what the upstream actually expects on this
 // endpoint (source-doc §19 H line 4720) — NOT full ISO-8601. WR-02
@@ -122,7 +122,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
       throw new Error("download_orders_export requires an authenticated user");
     }
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new ExCoreClient({ jwt, environment: args.environment });
 
     // Build query string. Only include `filters[order_id]` when the

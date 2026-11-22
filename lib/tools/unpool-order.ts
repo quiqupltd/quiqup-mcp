@@ -44,7 +44,6 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
 import {
   destructiveConfirmField,
   destructiveDryRunField,
@@ -54,9 +53,9 @@ import {
   buildConfirmationRequiredResult,
 } from "@/lib/middleware/destructive";
 import {
-  assertOrderBelongsToUser,
   ScopeViolationError,
 } from "@/lib/middleware/scope";
+import { assertOrderOwned, jwtFor, lookupOwnedOrderRow } from "@/lib/caller-auth";
 
 const inputSchema = z.object({
   order_uuid: z
@@ -120,7 +119,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     // 3. Per-order scope assertion. Runs BEFORE the dry-run branch so a
     //    dry-run preview still fails-fast on out-of-scope orders.
     try {
-      await assertOrderBelongsToUser(args.order_uuid, auth.userId);
+      await assertOrderOwned(auth, args.order_uuid, args.environment);
     } catch (err) {
       if (err instanceof ScopeViolationError) {
         return {
@@ -164,7 +163,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     // 5. Real PUT. Mint JWT → PlatformApiClient → empty body (upstream
     //    contract — the path parameter is the only argument). Path is
     //    URL-encoded to lock out path-injection (T-04-10).
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new PlatformApiClient({
       jwt,
       environment: args.environment,
@@ -181,6 +180,138 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
           type: "text" as const,
           text:
             `Unpooled order ${args.order_uuid} from its mission.\n\n` +
+            `Upstream response:\n${JSON.stringify(data, null, 2)}`,
+        },
+      ],
+    };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Agent door (`/agent/mcp`) variant
+// ---------------------------------------------------------------------------
+//
+// Platform `filters[order_id]` takes NUMERIC client order ids only, never a
+// uuid. So on the agent door the tool takes the numeric order id; the
+// ownership lookup on GET /quiqdash/orders both proves the order is the
+// caller's and supplies the row's `uuid`, which goes into the unpool path.
+// A row without a uuid is refused.
+
+const agentInputSchema = z.object({
+  order_id: z
+    .string()
+    .regex(/^\d{1,12}$/, "order_id must be the numeric client order id (1 to 12 digits)")
+    .describe(
+      "Numeric client order id (digits only, 1 to 12). The order's uuid is looked up " +
+        "from your own order list; never pass a uuid.",
+    ),
+  confirm: destructiveConfirmField,
+  dry_run: destructiveDryRunField,
+  idempotency_key: z
+    .string()
+    .optional()
+    .describe(
+      "Optional client-supplied key. Duplicate calls with the same key within 15 " +
+        "minutes return the cached result without re-firing the upstream PUT.",
+    ),
+  environment: environmentField,
+});
+
+export const agentSpec: ToolSpec<typeof agentInputSchema, typeof outputSchema> = {
+  name: "unpool_order",
+  description:
+    "DESTRUCTIVE: unpool a single order from its current mission, returning it to the " +
+    "unassigned pool (the order survives, only the mission assignment is severed). Takes " +
+    "the NUMERIC order id; the uuid is looked up from your own order list. Requires " +
+    "`confirm: true`; `dry_run: true` previews. Endpoint: PUT " +
+    "/quiqdash/missions/unpool/orders/{uuid} on platform-api.",
+  inputSchema: agentInputSchema,
+  outputSchema,
+  guardrails: {
+    rateLimit: { capacity: 3, refillPerSec: 3 / 60 },
+    idempotency: { keyArg: "idempotency_key", ttlMs: 15 * 60 * 1000 },
+    audit: true,
+  },
+  handler: async (auth, args) => {
+    if (!auth.userId) {
+      throw new Error("unpool_order requires an authenticated user");
+    }
+    try {
+      requireConfirm("unpool_order", args, "1 order from its mission");
+    } catch (err) {
+      if (err instanceof ConfirmationRequiredError) {
+        return buildConfirmationRequiredResult(err);
+      }
+      throw err;
+    }
+
+    let row: Record<string, unknown>;
+    try {
+      row = await lookupOwnedOrderRow(auth, args.order_id);
+    } catch (err) {
+      if (err instanceof ScopeViolationError) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                `unpool_order refused: order ${args.order_id} is not in your order list. ` +
+                `No upstream PUT was attempted.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      throw err;
+    }
+    const uuid = typeof row.uuid === "string" ? row.uuid : "";
+    if (!uuid) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              `unpool_order refused: order ${args.order_id} has no uuid in your order ` +
+              `list, so it cannot be unpooled. No upstream PUT was attempted.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (isDryRun(args)) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                dryRun: true,
+                orderId: args.order_id,
+                orderUuid: uuid,
+                simulated: { ok: true, transition: "unpool_order", order_uuid: uuid },
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    }
+
+    const jwt = await jwtFor(auth, args.environment);
+    const client = new PlatformApiClient({ jwt, environment: args.environment });
+    const data = await client.request(
+      "PUT",
+      `/quiqdash/missions/unpool/orders/${encodeURIComponent(uuid)}`,
+      { body: {} },
+    );
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text:
+            `Unpooled order ${args.order_id} (uuid ${uuid}) from its mission.\n\n` +
             `Upstream response:\n${JSON.stringify(data, null, 2)}`,
         },
       ],

@@ -34,7 +34,8 @@
 
 import { z } from "zod";
 import type { ToolSpec } from "./register";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { isPlatformCaller, jwtFor, lookupOwnedOrderRow } from "@/lib/caller-auth";
+import { ScopeViolationError } from "@/lib/middleware/scope";
 import { environmentField } from "@/lib/clients/quiqup-env";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 
@@ -103,7 +104,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
       throw new Error("find_order_by_id_or_barcode requires an authenticated user");
     }
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     // 03-REVIEW WR-01: migrated from inline fetch boilerplate to the
     // PlatformApiClient helper. The helper handles base-URL resolution,
     // URLSearchParams hygiene, Bearer + Accept headers, and the
@@ -121,8 +122,56 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
         },
       },
     );
+    if (isPlatformCaller(auth)) {
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(await agentSafeEnvelope(auth, data), null, 2) },
+        ],
+      };
+    }
     return {
       content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
     };
   },
 };
+
+/** Keys never returned to an agent: customer fields and anything that names a person or place. */
+const AGENT_STRIPPED_KEY = /^(origin|destination|tracking_url|user|items|products|display_items_info|contact.*|.*phone.*|.*email.*)$/i;
+
+function stripCustomerFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripCustomerFields);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (!AGENT_STRIPPED_KEY.test(k)) out[k] = stripCustomerFields(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Agent door only. The route's own token scoping is not relied on: when the
+ * response carries an order, it must be in the caller's own order list
+ * (same platform probe the write tools use, list only, no find fallback,
+ * which would just trust this same response). Not owned -> the upstream
+ * "no match" shape, never the envelope. Owned -> the envelope with customer
+ * fields removed (Carol must never receive them).
+ */
+async function agentSafeEnvelope(
+  auth: Parameters<typeof lookupOwnedOrderRow>[0],
+  data: unknown,
+): Promise<unknown> {
+  const env = (data ?? {}) as { error?: unknown; found_by?: unknown; order?: { id?: unknown } };
+  if (env.order === undefined || env.order === null) return stripCustomerFields(data);
+  const id = env.order.id;
+  const notFound = { error: "Order not found.", found_by: null, order: null };
+  if (id === undefined || id === null) return notFound;
+  try {
+    await lookupOwnedOrderRow(auth, String(id));
+  } catch (err) {
+    if (err instanceof ScopeViolationError) return notFound;
+    throw err;
+  }
+  return stripCustomerFields(data);
+}

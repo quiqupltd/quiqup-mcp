@@ -49,7 +49,7 @@ import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 
 // Address shape — matches source-doc §6 line 2324..2340 (billing_address)
 // and §6 line 2351..2367 (origin_address / shipping_address). The three
@@ -205,7 +205,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     void _idem;
     void _env;
 
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    const jwt = await jwtFor(auth, args.environment);
     const client = new PlatformApiClient({
       jwt,
       environment: args.environment,
