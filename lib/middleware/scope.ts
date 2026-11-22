@@ -263,7 +263,9 @@ export async function findOwnedPlatformOrder(
         return found.order;
       }
     } catch (err) {
-      if (!(err instanceof QuiqupHttpError && err.status >= 400 && err.status < 500)) {
+      // Only a 404 means "not found, so not owned". 401/403 (auth) and 5xx
+      // (platform trouble) must surface as such, not as a scope violation.
+      if (!(err instanceof QuiqupHttpError && err.status === 404)) {
         throw err;
       }
     }

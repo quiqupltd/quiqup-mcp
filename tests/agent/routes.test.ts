@@ -270,6 +270,30 @@ describe("/agent/mcp (agents, platform token)", () => {
     }
   });
 
+  it("a successful tools/call whose argument mentions tools/call is not mistaken for a rejection and is audited once", async () => {
+    server.use(
+      http.get(`${PLATFORM}/me`, () => HttpResponse.json(ME_OK)),
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () => HttpResponse.json({ error: "no match", found_by: null })),
+    );
+    const audit = captureAudit();
+    try {
+      const { POST } = await import("@/app/agent/[transport]/route");
+      const res = await POST(
+        rpc("http://localhost/agent/mcp", agentHeaders, {
+          jsonrpc: "2.0",
+          id: 32,
+          method: "tools/call",
+          params: { name: "find_order_by_id_or_barcode", arguments: { value: "tools/call", intention: "set_cancelled" } },
+        }),
+      );
+      await res.text();
+      expect(audit.records()).toHaveLength(1);
+      expect(audit.records()[0]).toMatchObject({ tool: "find_order_by_id_or_barcode", ok: true });
+    } finally {
+      audit.restore();
+    }
+  });
+
   it("a tool call that reaches the callback is audited once, not twice", async () => {
     server.use(
       http.get(`${PLATFORM}/me`, () => HttpResponse.json(ME_OK)),

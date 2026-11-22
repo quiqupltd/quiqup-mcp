@@ -2,7 +2,7 @@ import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { AGENT_HEADER, AGENT_LABEL_RE, verifyAgentRequest } from "@/lib/agent-auth";
 import { emitAuditRecord } from "@/lib/middleware/audit";
-import { auditPreCallbackErrors } from "@/lib/agent-door-audit";
+import { auditPreCallbackErrors, toolCallsIn } from "@/lib/agent-door-audit";
 import type { AgentPlatformExtra } from "@/lib/agent-auth";
 import { registerAgentTool } from "@/lib/tools/register";
 
@@ -109,7 +109,9 @@ async function agentHandler(req: Request): Promise<Response> {
     body = null;
   }
   const res = await authed(req);
-  if (!JSON.stringify(body ?? "").includes('"tools/call"')) return res;
+  // Parsed JSON-RPC check (single message or batch), not a substring search:
+  // an argument value containing the text "tools/call" must not trigger it.
+  if (toolCallsIn(body).size === 0) return res;
   const text = await res.text();
   const p = (result.authInfo.extra as { platform: AgentPlatformExtra }).platform;
   auditPreCallbackErrors(body, text, {

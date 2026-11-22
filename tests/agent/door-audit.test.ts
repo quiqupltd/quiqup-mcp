@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
-import { auditPreCallbackErrors } from "@/lib/agent-door-audit";
+import { auditPreCallbackErrors, toolCallsIn } from "@/lib/agent-door-audit";
 import { captureAudit } from "./helpers";
 
 const who = { userId: "platform:production:001ABC", agent: "carol", salesforceId: "001ABC", environment: "production" };
@@ -35,5 +35,16 @@ describe("auditPreCallbackErrors", () => {
       who,
     );
     expect(audit.records()).toHaveLength(0);
+  });
+});
+
+describe("toolCallsIn (parsed JSON-RPC, not a substring search)", () => {
+  it("finds tools/call in a single message and in a batch", () => {
+    expect([...toolCallsIn({ id: 1, method: "tools/call", params: { name: "a" } })]).toEqual([["1", "a"]]);
+    expect(toolCallsIn([{ id: 1, method: "tools/list" }, { id: 2, method: "tools/call", params: { name: "b" } }]).size).toBe(1);
+  });
+  it("ignores a non-call that merely contains the text", () => {
+    expect(toolCallsIn({ id: 1, method: "tools/list", params: { note: "tools/call" } }).size).toBe(0);
+    expect(toolCallsIn(null).size).toBe(0);
   });
 });

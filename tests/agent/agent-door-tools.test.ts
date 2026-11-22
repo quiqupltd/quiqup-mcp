@@ -749,6 +749,29 @@ describe("pending drafts: find_by_id fallback for the ownership probe", () => {
     expect(puts).toBe(1);
   });
 
+  it("fallback 401/403/500 surface as errors, not as 'not owned'; only 404 means not owned", async () => {
+    for (const status of [401, 403, 500]) {
+      server.use(
+        emptyList,
+        http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () => new HttpResponse("x", { status })),
+      );
+      resetRateLimit();
+      const r = await sendRun();
+      expect(r.isError).toBe(true);
+      const t = textOf(r as never);
+      expect(t).toContain(`HTTP ${status}`);
+      expect(t).not.toContain("not visible");
+    }
+    server.use(
+      emptyList,
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () => new HttpResponse("nf", { status: 404 })),
+    );
+    resetRateLimit();
+    const nf = await sendRun();
+    expect(nf.isError).toBe(true);
+    expect(textOf(nf as never)).toContain("not visible");
+  });
+
   it("find_by_id returns a DIFFERENT id -> refused, no PUT", async () => {
     let puts = 0;
     server.use(
@@ -765,16 +788,12 @@ describe("pending drafts: find_by_id fallback for the ownership probe", () => {
     expect(puts).toBe(0);
   });
 
-  it("find_by_id answers with an error, or 4xx -> refused", async () => {
+  it("find_by_id answers with an error field -> refused", async () => {
     server.use(
       emptyList,
       http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () =>
         HttpResponse.json({ error: "incompatible intention", order: { id: 77 } }),
       ),
-    );
-    expect((await sendRun()).isError).toBe(true);
-    server.use(
-      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () => new HttpResponse("no", { status: 404 })),
     );
     expect((await sendRun()).isError).toBe(true);
   });
