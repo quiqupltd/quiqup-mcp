@@ -12,7 +12,7 @@ import { server } from "../setup/msw";
 import { _resetAgentAuthCacheForTests } from "@/lib/agent-auth";
 import { _resetForTests as resetIdempotency } from "@/lib/middleware/idempotency";
 import { _resetForTests as resetRateLimit } from "@/lib/middleware/rate-limit";
-import { PLATFORM, PLATFORM_STAGING, TOKEN, captureAudit } from "./helpers";
+import { CLERK_AT_JWT, PLATFORM, PLATFORM_STAGING, TOKEN, captureAudit } from "./helpers";
 
 vi.mock("@clerk/nextjs/server", () => ({
   auth: vi.fn(async () => ({ subject: undefined })),
@@ -101,10 +101,10 @@ describe("/mcp (people, Clerk OAuth)", () => {
 });
 
 describe("/agent/mcp (agents, platform token)", () => {
-  it("refuses a Clerk OAuth token: platform-api rejects it on /me -> 401, Clerk is never consulted", async () => {
-    server.use(http.get(`${PLATFORM}/me`, () => new HttpResponse("no", { status: 401 })));
+  it("refuses a Clerk OAuth token (typ at+jwt) locally: 401, no /me call, Clerk never consulted", async () => {
+    // No /me handler: a call would fail the test.
     const { POST } = await import("@/app/agent/[transport]/route");
-    const res = await POST(rpc("http://localhost/agent/mcp", { ...agentHeaders, Authorization: "Bearer clerk-oauth-token" }));
+    const res = await POST(rpc("http://localhost/agent/mcp", { ...agentHeaders, Authorization: `Bearer ${CLERK_AT_JWT}` }));
     expect(res.status).toBe(401);
     expect(res.headers.get("www-authenticate")).toContain("invalid_token");
     expect(clerkAuthFn).not.toHaveBeenCalled();
@@ -158,6 +158,7 @@ describe("/agent/mcp (agents, platform token)", () => {
     let seenAuth: string | null = null;
     server.use(
       http.get(`${PLATFORM}/me`, () => HttpResponse.json(ME_OK)),
+      http.get(`${PLATFORM}/quiqdash/orders`, () => HttpResponse.json({ results: [{ id: 123, uuid: "u" }] })),
       http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, ({ request }) => {
         seenAuth = request.headers.get("authorization");
         return HttpResponse.json({ found_by: "id", order: { id: 123, state: "pending" } });
@@ -181,7 +182,7 @@ describe("/agent/mcp (agents, platform token)", () => {
       expect(audit.records()).toHaveLength(1);
       expect(audit.records()[0]).toMatchObject({
         tool: "find_order_by_id_or_barcode",
-        userId: "platform:001ABC",
+        userId: "platform:production:001ABC",
         agent: "carol",
         salesforceId: "001ABC",
         environment: "production",
@@ -220,6 +221,73 @@ describe("/agent/mcp (agents, platform token)", () => {
       await rpcResult(res); // the tool runs while the response stream is read
       expect(stagingMe && stagingFind).toBe(true);
       expect(audit.records()[0]).toMatchObject({ environment: "staging" });
+    } finally {
+      audit.restore();
+    }
+  });
+
+  it("audits tools/call requests that fail validation or name an unknown tool (JSON-RPC error before the callback), no args", async () => {
+    server.use(http.get(`${PLATFORM}/me`, () => HttpResponse.json(ME_OK)));
+    const audit = captureAudit();
+    try {
+      const { POST } = await import("@/app/agent/[transport]/route");
+      const call = (id: number, name: string, args: unknown) =>
+        POST(
+          rpc("http://localhost/agent/mcp", agentHeaders, {
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: { name, arguments: args },
+          }),
+        ).then((r) => r.text());
+      // 11 ids: fails the input schema before the callback.
+      await call(10, "send_orders_for_collection", {
+        order_ids: Array.from({ length: 11 }, (_, i) => String(i + 1)),
+        confirm: true,
+      });
+      // not an allowlisted tool
+      await call(11, "set_delivery_complete", { order_ids: ["1"], secret: "do-not-log" });
+      const recs = audit.records();
+      expect(recs.map((r) => r.tool).sort()).toEqual(["send_orders_for_collection", "set_delivery_complete"]);
+      for (const r of recs) {
+        expect(r).toMatchObject({
+          ok: false,
+          agent: "carol",
+          salesforceId: "001ABC",
+          environment: "production",
+          userId: "platform:production:001ABC",
+        });
+        expect(String(r.error)).toContain("rejected before tool callback");
+        expect(r.argsRedacted).toEqual({});
+      }
+      expect(recs.map((r) => r.error).sort()).toEqual([
+        "rejected before tool callback: input-validation",
+        "rejected before tool callback: unknown-tool",
+      ]);
+      expect(audit.raw().join("")).not.toContain("do-not-log");
+    } finally {
+      audit.restore();
+    }
+  });
+
+  it("a tool call that reaches the callback is audited once, not twice", async () => {
+    server.use(
+      http.get(`${PLATFORM}/me`, () => HttpResponse.json(ME_OK)),
+      http.get(`${PLATFORM}/orders/partner-cancellation-reasons`, () => HttpResponse.json({ reasons: [] })),
+    );
+    const audit = captureAudit();
+    try {
+      const { POST } = await import("@/app/agent/[transport]/route");
+      const res = await POST(
+        rpc("http://localhost/agent/mcp", agentHeaders, {
+          jsonrpc: "2.0",
+          id: 20,
+          method: "tools/call",
+          params: { name: "list_partner_cancellation_reasons", arguments: {} },
+        }),
+      );
+      await res.text();
+      expect(audit.records()).toHaveLength(1);
     } finally {
       audit.restore();
     }

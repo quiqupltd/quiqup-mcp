@@ -22,7 +22,6 @@
 import type { QuiqupEnvironment } from "@/lib/clients/quiqup-env";
 import {
   assertOrderBelongsToUser,
-  assertOrderBelongsToPlatformCaller,
   findOwnedPlatformOrder,
 } from "@/lib/middleware/scope";
 import { getQuiqupReadyJwt } from "@/lib/quiqup";
@@ -84,16 +83,18 @@ export async function assertOrderOwned(
   auth: AuthContext,
   orderId: string,
   environment?: QuiqupEnvironment,
+  intention?: string,
 ): Promise<void> {
   if (isPlatformCaller(auth)) {
     const actual = auth.platformEnvironment ?? "production";
     if (environment !== undefined && environment !== actual) {
       throw new PlatformEnvironmentMismatchError(environment, actual);
     }
-    await assertOrderBelongsToPlatformCaller(
+    await findOwnedPlatformOrder(
       orderId,
       auth.userId ?? "platform:unknown",
       { jwt: auth.platformJwt as string, environment: actual },
+      { fallbackIntention: intention },
     );
     return;
   }
@@ -111,6 +112,7 @@ export async function assertOrderOwned(
 export async function lookupOwnedOrderRow(
   auth: AuthContext,
   orderId: string,
+  intention?: string,
 ): Promise<Record<string, unknown>> {
   if (!isPlatformCaller(auth)) {
     throw new Error("lookupOwnedOrderRow is for platform-token callers only.");
@@ -118,5 +120,17 @@ export async function lookupOwnedOrderRow(
   return findOwnedPlatformOrder(orderId, auth.userId ?? "platform:unknown", {
     jwt: auth.platformJwt as string,
     environment: auth.platformEnvironment ?? "production",
-  });
+  }, { fallbackIntention: intention });
+}
+
+/** Numeric client order id, as the platform `filters[order_id]` and PUT bodies take. */
+export const AGENT_ORDER_ID_RE = /^\d{1,12}$/;
+
+/**
+ * Agent-door guard for tools whose schema is shared with `/mcp`: platform
+ * callers may only pass numeric order ids. Returns the offending ids.
+ */
+export function nonNumericIdsForAgent(auth: AuthContext, ids: string[]): string[] {
+  if (!isPlatformCaller(auth)) return [];
+  return ids.filter((id) => !AGENT_ORDER_ID_RE.test(id));
 }

@@ -65,7 +65,7 @@ export interface AuthContext {
   platformEnvironment?: QuiqupEnvironment | null;
   /** Agent label from the `X-Quiqup-Agent` header (e.g. "carol"). */
   agent?: string | null;
-  /** The merchant's Salesforce id from `/me`; `userId` is `platform:<this>`. */
+  /** The merchant's Salesforce id from `/me`; `userId` is `platform:<environment>:<this>`. */
   salesforceId?: string | null;
 }
 
@@ -154,6 +154,13 @@ export interface ToolSpec<
   }>;
   /** Opt-in guardrails. Absent = no middleware behaviour change. */
   guardrails?: GuardrailConfig;
+  /**
+   * Stricter input schema advertised and enforced on the agent door
+   * (`/agent/mcp`) instead of `inputSchema` (e.g. numeric-only order ids,
+   * `reason` required). `/mcp` keeps using `inputSchema`.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  agentInputSchema?: z.ZodObject<any>;
 }
 
 /**
@@ -286,7 +293,9 @@ export function registerTool<
   // ON_BEHALF_OF_FIELD is injected on `/mcp` so every registered tool gains
   // the impersonation parameter without any per-tool changes; the agent door
   // drops it (and `environment`) instead.
-  const shape: Record<string, z.ZodTypeAny> = { ...spec.inputSchema.shape };
+  const shape: Record<string, z.ZodTypeAny> = {
+    ...(agentDoor && spec.agentInputSchema ? spec.agentInputSchema : spec.inputSchema).shape,
+  };
   if (agentDoor) {
     delete shape.environment;
   } else {
@@ -344,10 +353,12 @@ export function registerTool<
           throw new Error("agent auth context is incomplete (jwt, salesforceId, environment)");
         }
         const platformAuth: AuthContext = {
-          // Stable per-merchant caller id: rate-limit and idempotency keys
-          // are built from `userId`, so limits are per merchant, not shared
-          // across every merchant a server agent acts for.
-          userId: `platform:${platform.salesforceId}`,
+          // Stable per-merchant, per-environment caller id: rate-limit and
+          // idempotency keys are built from `userId`, so limits are per merchant
+          // (not shared across the merchants an agent acts for) and staging
+          // never shares a bucket or cached result with production (sandbox
+          // copies keep Salesforce ids).
+          userId: `platform:${platform.environment}:${platform.salesforceId}`,
           orgId: null,
           sessionId: null,
           scopes: authInfo?.scopes ?? [],

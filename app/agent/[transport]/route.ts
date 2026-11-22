@@ -2,6 +2,8 @@ import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { AGENT_HEADER, AGENT_LABEL_RE, verifyAgentRequest } from "@/lib/agent-auth";
 import { emitAuditRecord } from "@/lib/middleware/audit";
+import { auditPreCallbackErrors } from "@/lib/agent-door-audit";
+import type { AgentPlatformExtra } from "@/lib/agent-auth";
 import { registerAgentTool } from "@/lib/tools/register";
 
 /**
@@ -92,9 +94,31 @@ async function agentHandler(req: Request): Promise<Response> {
       { status: result.status, headers: { "Content-Type": "application/json" } },
     );
   }
-  // 401 (and success): withMcpAuth answers. No identity in the WeakMap means
-  // it returns the standard 401 + WWW-Authenticate.
-  return authed(req);
+  if (!result.ok || req.method !== "POST") {
+    // 401: withMcpAuth answers with the standard 401 + WWW-Authenticate.
+    return authed(req);
+  }
+
+  // Door-level audit of tools/call requests that fail with a JSON-RPC error
+  // before the tool callback (validation, unknown tool). Only tools/call
+  // bodies are buffered; everything else streams straight through.
+  let body: unknown = null;
+  try {
+    body = await req.clone().json();
+  } catch {
+    body = null;
+  }
+  const res = await authed(req);
+  if (!JSON.stringify(body ?? "").includes('"tools/call"')) return res;
+  const text = await res.text();
+  const p = (result.authInfo.extra as { platform: AgentPlatformExtra }).platform;
+  auditPreCallbackErrors(body, text, {
+    userId: `platform:${p.environment}:${p.salesforceId}`,
+    agent: p.agent,
+    salesforceId: p.salesforceId,
+    environment: p.environment,
+  });
+  return new Response(text, { status: res.status, statusText: res.statusText, headers: res.headers });
 }
 
 export { agentHandler as GET, agentHandler as POST };

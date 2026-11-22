@@ -52,10 +52,24 @@ describe("find_order_by_id_or_barcode", () => {
     let seenAuth: string | null = null;
     let seenUrl: URL | undefined;
     server.use(
+      ownList([123]),
       http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, ({ request }) => {
         seenAuth = request.headers.get("authorization");
         seenUrl = new URL(request.url);
-        return HttpResponse.json({ found_by: "id", order: { id: 123, state: "pending" } });
+        return HttpResponse.json({
+          found_by: "id",
+          order: {
+            id: 123,
+            state: "pending",
+            brand_name: "Acme",
+            origin: { contact_name: "Ann", address1: "1 Road" },
+            destination: { contact_phone: "+971500000000" },
+            tracking_url: "https://track/123",
+            user: { email: "buyer@example.com" },
+            items: [{ description: "Shoes" }],
+            contact_email: "c@example.com",
+          },
+        });
       }),
     );
     const r = await _invokeWithGuardrailsForTests(
@@ -64,7 +78,13 @@ describe("find_order_by_id_or_barcode", () => {
       { value: "123", intention: "set_cancelled" },
     );
     expect(r.isError).toBeFalsy();
-    expect(textOf(r as never)).toContain('"state": "pending"');
+    const out = JSON.parse(textOf(r as never)) as { order: Record<string, unknown> };
+    expect(out.order.state).toBe("pending");
+    expect(out.order.brand_name).toBe("Acme");
+    for (const k of ["origin", "destination", "tracking_url", "user", "items", "contact_email"]) {
+      expect(out.order).not.toHaveProperty(k);
+    }
+    expect(textOf(r as never)).not.toMatch(/Ann|buyer@|Shoes|\+9715/);
     expect(seenAuth).toBe(`Bearer ${TOKEN}`);
     expect(seenUrl!.searchParams.get("value")).toBe("123");
     // Read tool, no guardrails block: still audited on the agent door.
@@ -72,12 +92,38 @@ describe("find_order_by_id_or_barcode", () => {
     expect(recs).toHaveLength(1);
     expect(recs[0]).toMatchObject({
       tool: "find_order_by_id_or_barcode",
-      userId: "platform:001ABC",
+      userId: "platform:production:001ABC",
       agent: "carol",
       salesforceId: "001ABC",
       environment: "production",
       ok: true,
     });
+  });
+
+  it("a foreign order (not in the caller's own list) returns the not-found shape, never the envelope", async () => {
+    server.use(
+      http.get(`${PLATFORM}/quiqdash/orders`, () => HttpResponse.json({ results: [] })),
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () =>
+        HttpResponse.json({ found_by: "barcode", order: { id: 555, state: "pending", destination: { address1: "Secret St" } } }),
+      ),
+    );
+    const r = await _invokeWithGuardrailsForTests(findOrder, platformAuth(), {
+      value: "QUI-AE-555-1",
+      intention: "set_cancelled",
+    });
+    const t = textOf(r as never);
+    expect(JSON.parse(t)).toEqual({ error: "Order not found.", found_by: null, order: null });
+    expect(t).not.toContain("Secret St");
+  });
+
+  it("upstream no-match (200 with error, no order) passes through without a probe", async () => {
+    server.use(
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () =>
+        HttpResponse.json({ error: "no match", found_by: null }),
+      ),
+    );
+    const r = await _invokeWithGuardrailsForTests(findOrder, platformAuth(), { value: "9", intention: "set_cancelled" });
+    expect(JSON.parse(textOf(r as never)).error).toBe("no match");
   });
 
   it("error path: upstream 500 comes back as an isError result and is audited ok:false", async () => {
@@ -262,6 +308,10 @@ describe("cancel_lastmile_orders_batch on the agent door", () => {
         const id = new URL(request.url).searchParams.get("filters[order_id]");
         return HttpResponse.json({ results: id === "123" ? [{ id: 123 }] : [] });
       }),
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () =>
+        HttpResponse.json({ error: "not found", order: null }),
+      ),
+
       http.put(`${PLATFORM}/quiqdash/orders/batch/set_cancelled`, () => {
         puts += 1;
         return HttpResponse.json([]);
@@ -368,6 +418,9 @@ describe("send_orders_for_collection", () => {
     let puts = 0;
     server.use(
       http.get(`${PLATFORM}/quiqdash/orders`, () => HttpResponse.json({ results: [] })),
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () =>
+        HttpResponse.json({ error: "not found", order: null }),
+      ),
       http.put(`${PLATFORM}/quiqdash/orders/batch/set_ready_for_collection`, () => {
         puts += 1;
         return HttpResponse.json([]);
@@ -541,8 +594,8 @@ describe("repair_integration_orders (agent variant)", () => {
 
 describe("per-merchant rate limits and idempotency", () => {
   it("rate limits key on platform:<salesforceId>: one merchant exhausting a tool does not block another", async () => {
-    const a = platformAuth({ userId: "platform:001AAA", salesforceId: "001AAA" });
-    const b = platformAuth({ userId: "platform:001BBB", salesforceId: "001BBB" });
+    const a = platformAuth({ userId: "platform:production:001AAA", salesforceId: "001AAA" });
+    const b = platformAuth({ userId: "platform:production:001BBB", salesforceId: "001BBB" });
     // confirm missing -> gate refusal with zero upstream traffic, but each
     // call still consumes one rate-limit token (capacity 3 / burst).
     const call = (auth: typeof a) =>
@@ -566,8 +619,8 @@ describe("per-merchant rate limits and idempotency", () => {
         return HttpResponse.json({ workflow_id: `wf-${posts}`, status: "running" });
       }),
     );
-    const a = platformAuth({ userId: "platform:001AAA", salesforceId: "001AAA" });
-    const b = platformAuth({ userId: "platform:001BBB", salesforceId: "001BBB" });
+    const a = platformAuth({ userId: "platform:production:001AAA", salesforceId: "001AAA" });
+    const b = platformAuth({ userId: "platform:production:001BBB", salesforceId: "001BBB" });
     const args = { ids: ["#1"], source: "shopify", idempotency_key: "same-key" };
     await _invokeWithGuardrailsForTests(repair, a, args);
     await _invokeWithGuardrailsForTests(repair, b, args);
@@ -668,5 +721,130 @@ describe("on_behalf_of_email is never honoured for platform-token callers", () =
       error: "on_behalf_of_email-refused-for-platform-token",
       agent: "carol",
     });
+  });
+});
+
+describe("pending drafts: find_by_id fallback for the ownership probe", () => {
+  const emptyList = http.get(`${PLATFORM}/quiqdash/orders`, () => HttpResponse.json({ results: [] }));
+  const sendRun = () =>
+    _invokeWithGuardrailsForTests(sendForCollection, platformAuth(), { order_ids: ["77"], confirm: true });
+
+  it("list misses, find_by_id returns the same numeric id with the action intention -> owned, PUT runs", async () => {
+    let intention: string | null = null;
+    let puts = 0;
+    server.use(
+      emptyList,
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, ({ request }) => {
+        intention = new URL(request.url).searchParams.get("intention");
+        return HttpResponse.json({ found_by: "id", order: { id: 77, uuid: "u77", state: "pending" } });
+      }),
+      http.put(`${PLATFORM}/quiqdash/orders/batch/set_ready_for_collection`, () => {
+        puts += 1;
+        return HttpResponse.json([{ id: 77 }]);
+      }),
+    );
+    const r = await sendRun();
+    expect(r.isError).toBeFalsy();
+    expect(intention).toBe("set_ready_for_collection");
+    expect(puts).toBe(1);
+  });
+
+  it("find_by_id returns a DIFFERENT id -> refused, no PUT", async () => {
+    let puts = 0;
+    server.use(
+      emptyList,
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () =>
+        HttpResponse.json({ order: { id: 78 } }),
+      ),
+      http.put(`${PLATFORM}/quiqdash/orders/batch/set_ready_for_collection`, () => {
+        puts += 1;
+        return HttpResponse.json([]);
+      }),
+    );
+    expect((await sendRun()).isError).toBe(true);
+    expect(puts).toBe(0);
+  });
+
+  it("find_by_id answers with an error, or 4xx -> refused", async () => {
+    server.use(
+      emptyList,
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () =>
+        HttpResponse.json({ error: "incompatible intention", order: { id: 77 } }),
+      ),
+    );
+    expect((await sendRun()).isError).toBe(true);
+    server.use(
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () => new HttpResponse("no", { status: 404 })),
+    );
+    expect((await sendRun()).isError).toBe(true);
+  });
+
+  it("cancel uses the set_cancelled intention for its fallback", async () => {
+    let intention: string | null = null;
+    server.use(
+      REASONS,
+      emptyList,
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, ({ request }) => {
+        intention = new URL(request.url).searchParams.get("intention");
+        return HttpResponse.json({ order: { id: 77 } });
+      }),
+      http.put(`${PLATFORM}/quiqdash/orders/batch/set_cancelled`, () => HttpResponse.json([{ id: 77 }], { status: 201 })),
+    );
+    const r = await _invokeWithGuardrailsForTests(cancel, platformAuth(), { order_ids: ["77"], reason: "Customer request" });
+    expect(r.isError).toBeFalsy();
+    expect(intention).toBe("set_cancelled");
+  });
+});
+
+describe("agent-door order ids are numeric client order ids only", () => {
+  it("cancel and send advertise a digits-only agent schema (reason required for cancel)", () => {
+    const c = cancel.agentInputSchema!;
+    expect(c.safeParse({ order_ids: ["123"], reason: "x" }).success).toBe(true);
+    expect(c.safeParse({ order_ids: ["11111111-aaaa"], reason: "x" }).success).toBe(false);
+    expect(c.safeParse({ order_ids: ["1".repeat(13)], reason: "x" }).success).toBe(false);
+    expect(c.safeParse({ order_ids: ["123"] }).success).toBe(false);
+    const s = sendForCollection.agentInputSchema!;
+    expect(s.safeParse({ order_ids: ["123"] }).success).toBe(true);
+    expect(s.safeParse({ order_ids: ["abc"] }).success).toBe(false);
+  });
+
+  it("handlers refuse non-numeric ids for platform callers even if the schema was bypassed", async () => {
+    const c = await _invokeWithGuardrailsForTests(cancel, platformAuth(), { order_ids: ["u-1"], reason: "Customer request" });
+    expect(c.isError).toBe(true);
+    expect(textOf(c as never)).toContain("numeric");
+    const s = await _invokeWithGuardrailsForTests(sendForCollection, platformAuth(), { order_ids: ["u-1"], confirm: true });
+    expect(s.isError).toBe(true);
+    expect(textOf(s as never)).toContain("numeric");
+  });
+
+  it("the probe never accepts a uuid match", async () => {
+    server.use(
+      http.get(`${PLATFORM}/quiqdash/orders`, () => HttpResponse.json({ results: [{ id: 5, uuid: "u-abc" }] })),
+      http.get(`${PLATFORM}/quiqdash/orders/find_by_id_or_barcode`, () => HttpResponse.json({ error: "none", order: null })),
+    );
+    const s = await _invokeWithGuardrailsForTests(sendForCollection, platformAuth(), { order_ids: ["12345"], confirm: true });
+    expect(s.isError).toBe(true);
+  });
+});
+
+describe("caller key includes the environment", () => {
+  it("staging and production for the same merchant do not share an idempotency cache", async () => {
+    let posts = 0;
+    server.use(
+      http.post(`${PLATFORM}/integrations/repair-orders`, () => {
+        posts += 1;
+        return HttpResponse.json({ status: "running" });
+      }),
+      http.post("https://platform-api.staging.quiqup.com/integrations/repair-orders", () => {
+        posts += 1;
+        return HttpResponse.json({ status: "running" });
+      }),
+    );
+    const prod = platformAuth({ userId: "platform:production:001ABC" });
+    const stg = platformAuth({ userId: "platform:staging:001ABC", platformEnvironment: "staging" });
+    const args = { ids: ["#1"], source: "shopify", idempotency_key: "k" };
+    await _invokeWithGuardrailsForTests(repair, prod, args);
+    await _invokeWithGuardrailsForTests(repair, stg, args);
+    expect(posts).toBe(2);
   });
 });

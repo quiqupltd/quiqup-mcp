@@ -132,26 +132,30 @@ export async function assertSkuBelongsToUser(
  * Every order state the platform order list knows about. The platform list
  * hides `pending` orders unless a state filter is sent, so the ownership
  * probe names every state to see the caller's order whatever state it is in.
- * Source: docs/quiqup-api/references/lastmile.md "Order states".
+ * Source: the order-shapes list captured from the live platform (F28).
  */
 export const ALL_ORDER_STATES = [
   "pending",
   "ready_for_collection",
   "out_for_collection",
   "collected",
+  "collection_failed",
   "received_at_depot",
+  "at_depot",
+  "scheduled",
+  "in_transit",
   "out_for_delivery",
   "delivery_complete",
-  "collection_failed",
   "delivery_failed",
   "return_to_origin",
   "out_for_return",
   "returned_to_origin",
   "cancelled",
   "on_hold",
-  "at_depot",
-  "scheduled",
-  "transit",
+  "error",
+  "picking_started",
+  "wms_on_hold",
+  "problematic",
 ] as const;
 
 /** Today's date in Dubai (UTC+4, no DST) as YYYY-MM-DD. */
@@ -208,7 +212,13 @@ export async function findOwnedPlatformOrder(
   orderId: string,
   callerId: string,
   platform: { jwt: string; environment: QuiqupEnvironment },
+  options: { fallbackIntention?: string } = {},
 ): Promise<Record<string, unknown>> {
+  // Agent-door order ids are numeric client order ids; the platform
+  // `filters[order_id]` takes nothing else and a uuid never counts as proof.
+  if (!/^\d{1,12}$/.test(orderId)) {
+    throw new ScopeViolationError("order", orderId, callerId);
+  }
   const client = new PlatformApiClient({
     jwt: platform.jwt,
     environment: platform.environment,
@@ -232,11 +242,31 @@ export async function findOwnedPlatformOrder(
     }
     throw err;
   }
-  const row = extractRows(body).find(
-    (r) => String(r.id) === orderId || r.uuid === orderId,
-  );
-  if (!row) {
-    throw new ScopeViolationError("order", orderId, callerId);
+  const row = extractRows(body).find((r) => String(r.id) === orderId);
+  if (row) return row;
+
+  // Pending drafts can have no `submitted_at`, which the from/to window of
+  // the list excludes. Fallback (only when the caller names the action):
+  // find_by_id_or_barcode under the caller's own token, accepted only when
+  // the returned order has exactly the requested numeric id and no error.
+  if (options.fallbackIntention) {
+    try {
+      const found = (await client.request("GET", "/quiqdash/orders/find_by_id_or_barcode", {
+        query: { value: orderId, intention: options.fallbackIntention },
+      })) as { error?: unknown; order?: Record<string, unknown> } | null;
+      if (
+        found &&
+        !found.error &&
+        found.order &&
+        String(found.order.id) === orderId
+      ) {
+        return found.order;
+      }
+    } catch (err) {
+      if (!(err instanceof QuiqupHttpError && err.status >= 400 && err.status < 500)) {
+        throw err;
+      }
+    }
   }
-  return row;
+  throw new ScopeViolationError("order", orderId, callerId);
 }

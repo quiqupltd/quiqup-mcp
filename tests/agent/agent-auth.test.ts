@@ -7,10 +7,11 @@ import { server } from "../setup/msw";
 import {
   verifyAgentRequest,
   VERIFY_CACHE_TTL_MS,
+  NEGATIVE_CACHE_TTL_MS,
   _resetAgentAuthCacheForTests,
   _agentAuthCacheSnapshotForTests,
 } from "@/lib/agent-auth";
-import { PLATFORM, PLATFORM_STAGING, TOKEN } from "./helpers";
+import { CLERK_AT_JWT, PLATFORM, PLATFORM_STAGING, TOKEN } from "./helpers";
 
 const ME_OK = {
   id: "u1",
@@ -256,5 +257,92 @@ describe("verification cache", () => {
     for (const s of spies) {
       expect(JSON.stringify(s.mock.calls)).not.toContain(TOKEN);
     }
+  });
+});
+
+describe("bearer shape guard (live platform-api behaviour)", () => {
+  const LIVE_NON_JWT_BODY =
+    '{"code":"unknown","message":"Get \\"http://api.production-ae.svc.cluster.local/me\\": dial tcp 10.0.0.1:80: connect: connection refused"}';
+  const LIVE_BAD_JWT_BODY = '{"code":"unauthenticated","message":"api auth failed"}';
+  const asReq = (token: string) =>
+    req({ Authorization: `Bearer ${token}`, "X-Quiqup-Agent": "carol" });
+
+  it.each([
+    ["40 x's", "x".repeat(40)],
+    ["two segments", "aaa.bbb"],
+    ["four segments", "aaa.bbb.ccc.ddd"],
+    ["empty segment", "aaa..ccc"],
+    ["non-base64url chars", "aa a.bbb.ccc"],
+    ["header not JSON", `${Buffer.from("not json").toString("base64url")}.e30.c2ln`],
+    ["header JSON but not an object", `${Buffer.from("[1]").toString("base64url")}.e30.c2ln`],
+  ])("%s: refused 401 locally, /me is never called", async (_n, token) => {
+    let hits = 0;
+    server.use(
+      http.get(`${PLATFORM}/me`, () => {
+        hits += 1;
+        return new HttpResponse(LIVE_NON_JWT_BODY, { status: 500 });
+      }),
+    );
+    const r = await verifyAgentRequest(asReq(token));
+    expect(r).toMatchObject({ ok: false, status: 401, error: "invalid_token" });
+    expect(hits).toBe(0);
+  });
+
+  it("a Clerk OAuth token (header typ at+jwt) is refused locally with 401, /me never called", async () => {
+    let hits = 0;
+    server.use(http.get(`${PLATFORM}/me`, () => { hits += 1; return HttpResponse.json(ME_OK); }));
+    const r = await verifyAgentRequest(asReq(CLERK_AT_JWT));
+    expect(r).toMatchObject({ ok: false, status: 401 });
+    expect(hits).toBe(0);
+  });
+
+  it("JWT-shaped bad token: platform 401 {code:unauthenticated} -> 401, not 503", async () => {
+    server.use(
+      http.get(`${PLATFORM}/me`, () => new HttpResponse(LIVE_BAD_JWT_BODY, { status: 401, headers: { "content-type": "application/json" } })),
+    );
+    expect(await verifyAgentRequest(asReq(TOKEN))).toMatchObject({ ok: false, status: 401 });
+  });
+
+  it("platform 5xx for a well-formed JWT is a real outage: 503", async () => {
+    server.use(
+      http.get(`${PLATFORM}/me`, () => new HttpResponse(LIVE_NON_JWT_BODY, { status: 500 })),
+    );
+    expect(await verifyAgentRequest(asReq(TOKEN))).toMatchObject({ ok: false, status: 503 });
+  });
+});
+
+describe("negative cache for refused tokens", () => {
+  it("a token platform-api refused is not re-checked inside the TTL, then is again", async () => {
+    let hits = 0;
+    server.use(
+      http.get(`${PLATFORM}/me`, () => {
+        hits += 1;
+        return new HttpResponse('{"code":"unauthenticated","message":"api auth failed"}', { status: 401 });
+      }),
+    );
+    const t0 = 5_000_000;
+    const now = vi.spyOn(Date, "now").mockReturnValue(t0);
+    await verifyAgentRequest(req(good));
+    await verifyAgentRequest(req(good));
+    expect(hits).toBe(1);
+    now.mockReturnValue(t0 + NEGATIVE_CACHE_TTL_MS + 1);
+    await verifyAgentRequest(req(good));
+    expect(hits).toBe(2);
+  });
+
+  it("is short (30 s), keyed on a hash (no raw token), and never used for outages (503)", async () => {
+    expect(NEGATIVE_CACHE_TTL_MS).toBe(30_000);
+    server.use(http.get(`${PLATFORM}/me`, () => new HttpResponse("no", { status: 401 })));
+    await verifyAgentRequest(req(good));
+    for (const { key, value } of _agentAuthCacheSnapshotForTests()) {
+      expect(key).toMatch(/^[0-9a-f]{64}$/);
+      expect(key + value).not.toContain(TOKEN);
+    }
+    _resetAgentAuthCacheForTests();
+    let hits = 0;
+    server.use(http.get(`${PLATFORM}/me`, () => { hits += 1; return new HttpResponse("boom", { status: 502 }); }));
+    await verifyAgentRequest(req(good));
+    await verifyAgentRequest(req(good));
+    expect(hits).toBe(2);
   });
 });

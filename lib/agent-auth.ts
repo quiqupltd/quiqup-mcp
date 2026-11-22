@@ -19,6 +19,17 @@
  * one merchant; admin work goes through `/mcp` with a person); `/me` itself
  * unavailable -> 503.
  *
+ * Live facts about platform-api `GET /me` (captured against production):
+ *   - a bearer that is NOT a JWT is forwarded by the platform to a legacy
+ *     service and answered 500 `{"code":"unknown", ... connection refused}`;
+ *   - a JWT-shaped bad token is answered 401 `{"code":"unauthenticated",
+ *     "message":"api auth failed"}`.
+ * So a bearer that is not three base64url segments with a JSON header is
+ * refused locally (401) without calling `/me` (that 500 would otherwise look
+ * like an outage), a header `typ` of `at+jwt` (a Clerk OAuth access token) is
+ * refused locally too, and 503 is kept for a real outage only: a 5xx from
+ * `/me` for a well-formed JWT, or a network failure.
+ *
  * Secrecy: the raw token is never logged and never used as a cache key. The
  * 50 s verification cache is keyed by sha256(token + environment) and stores
  * only the identity returned by `/me`.
@@ -69,6 +80,50 @@ export type AgentVerifyResult =
     };
 
 const cache = new Map<string, { identity: PlatformIdentity; expiresAt: number }>();
+/** Short negative cache: refused tokens (platform said 401/403) skip `/me` for a while. */
+export const NEGATIVE_CACHE_TTL_MS = 30_000;
+const negativeCache = new Map<string, number>(); // key -> expiresAt
+
+function negativeHit(key: string): boolean {
+  const exp = negativeCache.get(key);
+  if (exp === undefined) return false;
+  if (exp <= Date.now()) {
+    negativeCache.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function negativeSet(key: string): void {
+  if (negativeCache.size >= VERIFY_CACHE_MAX_ENTRIES) {
+    const now = Date.now();
+    for (const [k, v] of negativeCache) if (v <= now) negativeCache.delete(k);
+    if (negativeCache.size >= VERIFY_CACHE_MAX_ENTRIES) {
+      const oldest = negativeCache.keys().next().value;
+      if (oldest !== undefined) negativeCache.delete(oldest);
+    }
+  }
+  negativeCache.set(key, Date.now() + NEGATIVE_CACHE_TTL_MS);
+}
+
+const B64URL_SEGMENT = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * "JWT-shaped": three non-empty base64url segments whose first decodes to a
+ * JSON object. Returns the decoded header, or null.
+ */
+function jwtHeader(token: string): Record<string, unknown> | null {
+  const parts = token.split(".");
+  if (parts.length !== 3 || !parts.every((p) => B64URL_SEGMENT.test(p))) return null;
+  try {
+    const header: unknown = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+    return header !== null && typeof header === "object" && !Array.isArray(header)
+      ? (header as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 function cacheKey(token: string, environment: QuiqupEnvironment): string {
   return createHash("sha256").update(`${environment}\0${token}`).digest("hex");
@@ -100,10 +155,14 @@ function cacheSet(key: string, identity: PlatformIdentity): void {
 /** Tests only. */
 export function _resetAgentAuthCacheForTests(): void {
   cache.clear();
+  negativeCache.clear();
 }
 /** Tests only: lets a test prove the raw token is never stored. */
 export function _agentAuthCacheSnapshotForTests(): Array<{ key: string; value: string }> {
-  return [...cache].map(([key, v]) => ({ key, value: JSON.stringify(v) }));
+  return [
+    ...[...cache].map(([key, v]) => ({ key, value: JSON.stringify(v) })),
+    ...[...negativeCache].map(([key, v]) => ({ key, value: String(v) })),
+  ];
 }
 
 type MeResponse = {
@@ -179,6 +238,25 @@ export async function verifyAgentRequest(req: Request): Promise<AgentVerifyResul
     };
   }
 
+  const header = jwtHeader(bearer);
+  if (!header) {
+    // Never forwarded to /me: platform-api answers a non-JWT with a 500.
+    return {
+      ok: false,
+      status: 401,
+      error: "invalid_token",
+      description: "Bearer token is not a JWT.",
+    };
+  }
+  if (typeof header.typ === "string" && header.typ.toLowerCase() === "at+jwt") {
+    return {
+      ok: false,
+      status: 401,
+      error: "invalid_token",
+      description: "Clerk OAuth access tokens are not accepted on /agent/mcp; use a Quiqup platform token.",
+    };
+  }
+
   const agent = req.headers.get(AGENT_HEADER)?.trim() ?? "";
   if (!AGENT_LABEL_RE.test(agent)) {
     return {
@@ -203,9 +281,18 @@ export async function verifyAgentRequest(req: Request): Promise<AgentVerifyResul
 
   const key = cacheKey(bearer, environment);
   let identity = cacheGet(key);
+  if (!identity && negativeHit(key)) {
+    return {
+      ok: false,
+      status: 401,
+      error: "invalid_token",
+      description: "Quiqup platform-api did not accept this token.",
+    };
+  }
   if (!identity) {
     const fetched = await fetchIdentity(bearer, environment);
     if (fetched === "invalid") {
+      negativeSet(key);
       return {
         ok: false,
         status: 401,

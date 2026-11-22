@@ -4,12 +4,16 @@ import { AUDIT_PREFIX } from "@/lib/middleware/audit";
 
 export const PLATFORM = "https://platform-api.quiqup.com";
 export const PLATFORM_STAGING = "https://platform-api.staging.quiqup.com";
-export const TOKEN = "plat-token-SECRET-1";
+const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+/** A JWT-shaped platform token (header typ JWT). Fake, signature is junk. */
+export const TOKEN = `${b64({ alg: "RS256", typ: "JWT" })}.${b64({ sub: "u1", marker: "SECRET-PAYLOAD" })}.c2lnbmF0dXJl`;
+/** A Clerk OAuth access token shape (header typ at+jwt). */
+export const CLERK_AT_JWT = `${b64({ alg: "RS256", typ: "at+jwt" })}.${b64({ sub: "user_1" })}.c2lnbmF0dXJl`;
 
 /** AuthContext exactly as registerTool builds it for a platform-token caller. */
 export function platformAuth(over: Partial<AuthContext> = {}): AuthContext {
   return {
-    userId: "platform:001ABC",
+    userId: "platform:production:001ABC",
     orgId: null,
     sessionId: null,
     scopes: [],

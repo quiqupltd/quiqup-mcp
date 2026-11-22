@@ -27,7 +27,8 @@ Things the live calls must settle (each was an assumption in code; see the PR C 
 2. The list response envelope (expected ex-core v2: `{current_page, per_page, results, total, total_pages}`; confirm rows carry numeric `id` and `uuid`).
 3. Agent `unpool_order` takes the numeric id and unpools with the row's looked-up uuid (confirmed by coordinator; verify live).
 4. Whether `/me` on a Carol-minted merchant token returns `salesforce_id` and `admin:false, csr:false`.
-5. 201 / 202 `pending_projection` / 422 behaviour of `set_cancelled`.
+5. A pending DRAFT order (no `submitted_at`) passes the ownership probe, or the `find_by_id_or_barcode` fallback (must-pass before Carol uses `send_orders_for_collection`); and a foreign order id / barcode returns not-found from `find_order_by_id_or_barcode` on the agent door.
+6. 201 / 202 `pending_projection` / 422 behaviour of `set_cancelled`.
 
 ---
 

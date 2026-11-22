@@ -3,7 +3,13 @@ import type { ToolSpec } from "./register";
 import { QuiqupLastmileClient } from "@/lib/clients/quiqup-lastmile";
 import { PlatformApiClient } from "@/lib/clients/platform-api";
 import { environmentField } from "@/lib/clients/quiqup-env";
-import { assertOrderOwned, isPlatformCaller, jwtFor } from "@/lib/caller-auth";
+import {
+  AGENT_ORDER_ID_RE,
+  assertOrderOwned,
+  isPlatformCaller,
+  jwtFor,
+  nonNumericIdsForAgent,
+} from "@/lib/caller-auth";
 import { ScopeViolationError } from "@/lib/middleware/scope";
 
 // Per references/lastmile.md: cancellation + batch.
@@ -50,11 +56,26 @@ const inputSchema = z.object({
 
 const outputSchema = z.object({}).passthrough();
 
+// Agent door: numeric order ids only and `reason` required, in the schema itself.
+const agentInputSchema = inputSchema.extend({
+  order_ids: z
+    .array(z.string().regex(AGENT_ORDER_ID_RE, "numeric client order id (1 to 12 digits)"))
+    .min(1)
+    .max(10),
+  reason: z
+    .string()
+    .min(1)
+    .describe(
+      "Cancellation reason NAME, exactly as returned by `list_partner_cancellation_reasons`. Required.",
+    ),
+});
+
 export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
   name: "cancel_lastmile_orders_batch",
   description:
     "Cancel one or more pending Quiqup Last-Mile orders in a single batch (up to 10 orders per call). Each order is scope-checked under the caller's session before the batch PUT runs; if any order is not visible to the caller the whole batch is refused. Supply an optional `idempotency_key` to make retries safe within a 15-minute window. Optional `reason` (a name from `list_partner_cancellation_reasons`) switches to the merchant-app cancel route; it is REQUIRED on /agent/mcp. A 202 `pending_projection` answer means the cancel is recorded but not yet readable: do not retry, read the order back.",
   inputSchema,
+  agentInputSchema,
   outputSchema,
   guardrails: {
     rateLimit: { capacity: 3, refillPerSec: 3 / 60 }, // tight: 3 batches/min
@@ -77,6 +98,21 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
             text:
               "Batch cancel refused: `reason` is required on /agent/mcp. Call " +
               "`list_partner_cancellation_reasons` and pass one of the returned names.",
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const badIds = nonNumericIdsForAgent(auth, args.order_ids);
+    if (badIds.length > 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              `Batch cancel refused: order ids must be numeric client order ids ` +
+              `(1 to 12 digits); got ${badIds.join(", ")}. No cancel was attempted.`,
           },
         ],
         isError: true,
@@ -118,7 +154,7 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     const denied: string[] = [];
     for (const id of args.order_ids) {
       try {
-        await assertOrderOwned(auth, id, args.environment);
+        await assertOrderOwned(auth, id, args.environment, "set_cancelled");
       } catch (err) {
         if (err instanceof ScopeViolationError) {
           denied.push(id);

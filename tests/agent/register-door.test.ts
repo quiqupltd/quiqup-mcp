@@ -90,7 +90,7 @@ describe("door/identity consistency (fail closed)", () => {
     const r = await captured[0].cb({ order_id: "1" }, { authInfo: platformInfo });
     expect(r.isError).toBeFalsy();
     expect(seen[0]).toMatchObject({
-      userId: "platform:001ABC",
+      userId: "platform:production:001ABC",
       sessionId: null,
       platformJwt: TOKEN,
       platformEnvironment: "production",

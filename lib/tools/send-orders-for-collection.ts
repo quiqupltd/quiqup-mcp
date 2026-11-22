@@ -22,6 +22,7 @@ export const spec = defineBatchTransition({
   name: "send_orders_for_collection",
   path: "/quiqdash/orders/batch/set_ready_for_collection",
   bodyKey: "orderIds",
+  intention: "set_ready_for_collection",
   description:
     "Send pending orders on to Quiqup operations (merchant action 'Mark as " +
     "ready for collection'): PUT /quiqdash/orders/batch/set_ready_for_collection " +

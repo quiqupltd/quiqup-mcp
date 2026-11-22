@@ -131,13 +131,21 @@ describe("assertOrderOwned", () => {
     await expect(assertOrderOwned(platformAuth(), "1")).rejects.toBeInstanceOf(ScopeViolationError);
   });
 
-  it("platform caller: matches by uuid too (unpool_order passes the uuid)", async () => {
+  it("platform caller: a uuid never counts as proof (numeric ids only)", async () => {
     server.use(
-      http.get(`${PLATFORM}/quiqdash/orders`, () =>
-        HttpResponse.json({ results: [{ id: 9, uuid: "u-abc" }] }),
-      ),
+      http.get(`${PLATFORM}/quiqdash/orders`, () => HttpResponse.json({ results: [{ id: 9, uuid: "u-abc" }] })),
     );
-    await expect(assertOrderOwned(platformAuth(), "u-abc")).resolves.toBeUndefined();
+    await expect(assertOrderOwned(platformAuth(), "u-abc")).rejects.toBeInstanceOf(ScopeViolationError);
+  });
+
+  it("probe state list is exactly the 21 known states", () => {
+    expect([...ALL_ORDER_STATES]).toEqual([
+      "pending", "ready_for_collection", "out_for_collection", "collected", "collection_failed",
+      "received_at_depot", "at_depot", "scheduled", "in_transit", "out_for_delivery",
+      "delivery_complete", "delivery_failed", "return_to_origin", "out_for_return",
+      "returned_to_origin", "cancelled", "on_hold", "error", "picking_started", "wms_on_hold",
+      "problematic",
+    ]);
   });
 
   it("platform caller: empty list -> ScopeViolationError", async () => {
