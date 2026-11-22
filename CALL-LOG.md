@@ -1,140 +1,48 @@
-# Live staging call log - F28 PR C, step 1 (platform-token agent door)
+# Live call log - F28 PR C, step 1 (platform-token agent door)
 
-Repo rule (AGENTS.md): every tool change that reaches a Quiqup service needs a live
-staging call, logged here with the verbatim request and response.
+Repo rule (AGENTS.md): every tool change that reaches a Quiqup service needs a live call, logged here.
 
-Status of this file: the implementer had no staging credentials and was not allowed
-to call any live service, so every entry below is PENDING. The controller runs each
-call against `*.staging.quiqup.com` and pastes the verbatim result.
+**Where these ran.** There is no staging platform client for Carol (her only platform client is production), so the calls ran on 22 Nov 2026 against **production** platform-api, through a local build of this branch (`next start` on :3311, `/agent/mcp`), as the gated **test account `001P4000012OKKmIAO`** with a merchant token minted by Carol's platform client (`POST /admin/oauth/actor-token`). The token was minted inside a script that never printed it. Responses below are summarised: ids beyond 4 digits are masked and no customer field is reproduced. Writes were run only against the test account's one order (27266032, already cancelled) or as dry runs, so nothing changed.
 
-How to run (staging, through the real door):
+Executed by: Claude (controller), for Slava.
 
-```
-# 1. A staging merchant platform token (Carol mints it: POST /admin/oauth/actor-token {salesforce_id}).
-# 2. Through the local server (bun run dev) or a preview deployment:
-curl -sS -X POST http://localhost:3000/agent/mcp \
-  -H "Authorization: Bearer $STAGING_MERCHANT_PLATFORM_TOKEN" \
-  -H "X-Quiqup-Agent: carol" \
-  -H "X-Quiqup-Environment: staging" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"<tool>","arguments":{...}}}'
-```
+## Door
 
-Things the live calls must settle (each was an assumption in code; see the PR C report):
+| Call | Expected | Result |
+|---|---|---|
+| No bearer | 401 | 401 |
+| Non-JWT bearer (40 x's) | 401 | 401 (after round 2; before it, platform `/me` answered 500 and the door said 503) |
+| Valid token, no `X-Quiqup-Agent` | 400 | 400 |
+| Valid token + agent + `X-Quiqup-Environment: production`, `initialize` | 200 | 200 |
+| `tools/list` | the allowlist only | 8 tools: find_order_by_id_or_barcode, list_partner_cancellation_reasons, list_inventory, get_inventory_by_sku, cancel_lastmile_orders_batch, send_orders_for_collection, unpool_order, repair_integration_orders |
 
-1. Multi-state filter encoding on `GET /quiqdash/orders` (code sends one comma-joined `filters[state]`).
-2. The list response envelope (expected ex-core v2: `{current_page, per_page, results, total, total_pages}`; confirm rows carry numeric `id` and `uuid`).
-3. Agent `unpool_order` takes the numeric id and unpools with the row's looked-up uuid (confirmed by coordinator; verify live).
-4. Whether `/me` on a Carol-minted merchant token returns `salesforce_id` and `admin:false, csr:false`.
-5. A pending DRAFT order (no `submitted_at`) passes the ownership probe, or the `find_by_id_or_barcode` fallback (must-pass before Carol uses `send_orders_for_collection`); and a foreign order id / barcode returns not-found from `find_order_by_id_or_barcode` on the agent door.
-6. 201 / 202 `pending_projection` / 422 behaviour of `set_cancelled`.
+Live platform facts behind round 2: `GET /me` with a non-JWT bearer returns 500 `{"code":"unknown"}` (the platform forwards it to a legacy service); with a JWT-shaped bad token it returns 401 `{"code":"unauthenticated","message":"api auth failed"}`.
 
----
+## Tools
 
-## find_order_by_id_or_barcode
+| Tool | Call | Result |
+|---|---|---|
+| list_partner_cancellation_reasons | `{}` | ok: client-visible reasons, e.g. "Customer requested cancellation", "Duplicate order" |
+| list_inventory | `{page:1, per_page:2}` | ok: the test account's own stock rows |
+| get_inventory_by_sku | unknown SKU | tool error, upstream 404 `{"code":"not_found","message":"Product not found"}` |
+| find_order_by_id_or_barcode | own order 2726****, intention `cancelled` | ok: `error: "The order is not in the correct state for the requested action"`, `found_by: order_id` (platform pre-flight works with the token) |
+| find_order_by_id_or_barcode | **another merchant's** order 2768**** (Cosmopet), intention `cancelled` | tool error, upstream 404 "Couldn't find your order" |
+| send_orders_for_collection | own order, `confirm:true, dry_run:true` | ok: ownership passed, dry run, nothing sent |
+| unpool_order | own order by numeric id, dry run | ok: ownership passed, uuid looked up from the caller's own row |
+| unpool_order | id 9999**** not in the account | refused locally, "not in your order list", no upstream PUT |
+| cancel_lastmile_orders_batch | own cancelled order, reason "Not a real reason" | refused locally with the allowed reason names |
+| cancel_lastmile_orders_batch | own cancelled order, reason "Customer requested cancellation" | reached `PUT /quiqdash/orders/batch/set_cancelled`; platform 400 `invalid_argument`, transition to cancelled not allowed (already cancelled): wiring proven, no change |
+| repair_integration_orders | not called live | the test account has no failed store order; unit tests only |
 
-- **Change:** unchanged tool, now also served on /agent/mcp with a platform token (jwtFor path)
-- **Request to run:** GET /quiqdash/orders/find_by_id_or_barcode?value=<id>&intention=set_cancelled
-- **Date / Time (UTC):** PENDING
-- **Executed by:** PENDING
-- **Request (verbatim):** PENDING: run by the controller with a staging platform token
-- **Response (verbatim):** PENDING: run by the controller with a staging platform token
-- **Outcome:** PENDING: run by the controller with a staging platform token
+## Assumptions settled
 
----
+1. `filters[state]` as one comma-joined value: accepted (list and probe return rows).
+2. List envelope: `{current_page, per_page, results, total, total_pages}`, rows carry numeric `id` and `uuid`: confirmed.
+3. Agent unpool by numeric id with the looked-up uuid: confirmed (dry run).
+4. `/me` on a Carol-minted merchant token: accepted, not admin or csr (the door let it through).
+5. Cross-merchant: the platform's `find_by_id_or_barcode` is scoped by the token. With the test account's token, two Cosmopet orders returned 404 for intentions `cancelled` and `ready_for_collection`; with Cosmopet's own token, 200. The pending-order fallback therefore cannot reach another merchant's order.
 
-## list_partner_cancellation_reasons
+## Still open (needs a pending draft order on the test account)
 
-- **Change:** unchanged tool, now also served on /agent/mcp (jwtFor path)
-- **Request to run:** GET /orders/partner-cancellation-reasons
-- **Date / Time (UTC):** PENDING
-- **Executed by:** PENDING
-- **Request (verbatim):** PENDING: run by the controller with a staging platform token
-- **Response (verbatim):** PENDING: run by the controller with a staging platform token
-- **Outcome:** PENDING: run by the controller with a staging platform token
-
----
-
-## cancel_lastmile_orders_batch
-
-- **Change:** new optional `reason` (platform set_cancelled), required on /agent/mcp; platform ownership probe
-- **Request to run:** PUT /quiqdash/orders/batch/set_cancelled body {orderIds, reason}; ownership GET /quiqdash/orders?...filters[state]=<all states>; also re-run WITHOUT reason on /mcp with a Clerk token to confirm no change
-- **Date / Time (UTC):** PENDING
-- **Executed by:** PENDING
-- **Request (verbatim):** PENDING: run by the controller with a staging platform token
-- **Response (verbatim):** PENDING: run by the controller with a staging platform token
-- **Outcome:** PENDING: run by the controller with a staging platform token
-
----
-
-## send_orders_for_collection
-
-- **Change:** NEW tool on /mcp and /agent/mcp
-- **Request to run:** PUT /quiqdash/orders/batch/set_ready_for_collection body {orderIds}
-- **Date / Time (UTC):** PENDING
-- **Executed by:** PENDING
-- **Request (verbatim):** PENDING: run by the controller with a staging platform token
-- **Response (verbatim):** PENDING: run by the controller with a staging platform token
-- **Outcome:** PENDING: run by the controller with a staging platform token
-
----
-
-## unpool_order
-
-- **Change:** agent-door variant: numeric order_id, uuid looked up from the caller's own order row
-- **Request to run:** GET /quiqdash/orders?filters[order_id]=<numeric id> (supplies uuid), then PUT /quiqdash/missions/unpool/orders/<uuid>
-- **Date / Time (UTC):** PENDING
-- **Executed by:** PENDING
-- **Request (verbatim):** PENDING: run by the controller with a staging platform token
-- **Response (verbatim):** PENDING: run by the controller with a staging platform token
-- **Outcome:** PENDING: run by the controller with a staging platform token
-
----
-
-## repair_integration_orders (agent variant)
-
-- **Change:** NEW agent-door variant: ids only, no dates, no user_id, location_id 0
-- **Request to run:** POST /integrations/repair-orders body {source, ids, location_id: 0}
-- **Date / Time (UTC):** PENDING
-- **Executed by:** PENDING
-- **Request (verbatim):** PENDING: run by the controller with a staging platform token
-- **Response (verbatim):** PENDING: run by the controller with a staging platform token
-- **Outcome:** PENDING: run by the controller with a staging platform token
-
----
-
-## agent door verifier (/agent/mcp)
-
-- **Change:** NEW auth path: platform token validated on /me
-- **Request to run:** GET /me with the merchant platform token; X-Quiqup-Agent + X-Quiqup-Environment headers
-- **Date / Time (UTC):** PENDING
-- **Executed by:** PENDING
-- **Request (verbatim):** PENDING: run by the controller with a staging platform token
-- **Response (verbatim):** PENDING: run by the controller with a staging platform token
-- **Outcome:** PENDING: run by the controller with a staging platform token
-
----
-
-## list_inventory
-
-- **Change:** unchanged tool, now also served on /agent/mcp with a platform token (jwtFor path); confirm the route is account-scoped by the token alone
-- **Request to run:** GET /api/fulfilment/inventory?page=1&per_page=5
-- **Date / Time (UTC):** PENDING
-- **Executed by:** PENDING
-- **Request (verbatim):** PENDING: run by the controller with a staging platform token
-- **Response (verbatim):** PENDING: run by the controller with a staging platform token
-- **Outcome:** PENDING: run by the controller with a staging platform token
-
----
-
-## get_inventory_by_sku
-
-- **Change:** unchanged tool, now also served on /agent/mcp with a platform token (jwtFor path); confirm the route is account-scoped by the token alone
-- **Request to run:** GET /api/fulfilment/inventory/<sku>
-- **Date / Time (UTC):** PENDING
-- **Executed by:** PENDING
-- **Request (verbatim):** PENDING: run by the controller with a staging platform token
-- **Response (verbatim):** PENDING: run by the controller with a staging platform token
-- **Outcome:** PENDING: run by the controller with a staging platform token
-
+- A pending draft passes the ownership probe or the fallback, and a real cancel returns 201 or 202 `pending_projection`.
+- `send_orders_for_collection` for real: not run on production, because it would put an order into a courier run.
