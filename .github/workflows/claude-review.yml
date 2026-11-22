@@ -26,7 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     # Skip PRs from forks — they can't access ANTHROPIC_API_KEY anyway.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    timeout-minutes: 10
+    # 20, not 10: a large PR (the agent door, F28) ran out of time mid-review twice at 10.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
