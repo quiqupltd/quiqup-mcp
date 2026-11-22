@@ -32,7 +32,7 @@ Live platform facts behind round 2: `GET /me` with a non-JWT bearer returns 500 
 | unpool_order | id 9999**** not in the account | refused locally, "not in your order list", no upstream PUT |
 | cancel_lastmile_orders_batch | own cancelled order, reason "Not a real reason" | refused locally with the allowed reason names |
 | cancel_lastmile_orders_batch | own cancelled order, reason "Customer requested cancellation" | reached `PUT /quiqdash/orders/batch/set_cancelled`; platform 400 `invalid_argument`, transition to cancelled not allowed (already cancelled): wiring proven, no change |
-| repair_integration_orders | not called live | the test account has no failed store order; unit tests only |
+| repair_integration_orders | `{source:"shopify", ids:["#9999999"]}` (a store order number that does not exist) | ok: `{"message":"Order repair started","workflow_id":"repair-orders-shopify-001P4000***OKKmIAO-none-...","status":"running","started":true}`; the platform runs the repair for the caller's own account (scope `none`: no shop named), and a name that does not exist imports nothing |
 
 ## Assumptions settled
 
