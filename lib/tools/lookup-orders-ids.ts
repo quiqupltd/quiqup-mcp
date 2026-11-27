@@ -60,14 +60,15 @@ import { OrdersCoreGraphQLClient } from "@/lib/clients/orders-core-graphql";
  * lock out fields the FE quietly uses; the Phase-2 BL-01 footgun pattern).
  *
  * Observed keys (comment-pinned for description quality):
- *   stateIn               : string[]      e.g. ["pending", "live", "delivered"]
+ *   stateIn               : string[]      e.g. ["pending", "delivery_complete"]
  *   sourceIn              : string[]      integration source filter
  *   clientOrderIDIn       : number[]
  *   partnerOrderIDIn      : string[]
  *   brandNameIn           : string[]
- *   submittedAtBetween    : { from: string; to: string }   ISO-8601
- *   scheduledForBetween   : { from: string; to: string }
- *   search                : string        free-text search
+ *   submittedAtGTE / submittedAtLTE   : string   ISO-8601
+ *   scheduledForGTE / scheduledForLTE : string   ISO-8601
+ * (Orders Core has no `*Between` or `search` key on OrderWhereInput;
+ * Quiqdash's `buildWhereFilters` sends submittedAtGTE/LTE. sc-34635)
  */
 const inputSchema = z.object({
   first: z
@@ -108,8 +109,8 @@ const inputSchema = z.object({
       "OrderWhereInput filter (Quiqdash's `buildOrderFilters()` output). " +
         "Observed keys: stateIn (string[]), sourceIn (string[]), " +
         "clientOrderIDIn (number[]), partnerOrderIDIn (string[]), " +
-        "brandNameIn (string[]), submittedAtBetween ({from, to} ISO-8601), " +
-        "scheduledForBetween ({from, to} ISO-8601), search (string). " +
+        "brandNameIn (string[]), submittedAtGTE / submittedAtLTE (ISO-8601), " +
+        "scheduledForGTE / scheduledForLTE (ISO-8601). " +
         "Passed through to upstream — Quiqup BE validates the schema. " +
         "Bad fields surface in the response's `errors[]` array.",
     ),
@@ -140,8 +141,12 @@ const outputSchema = z
  * Mirrors docs/quiqup-api-full-frontend-extract.md §19 E lines 4434-4458,
  * narrowed to `edges.node.clientOrderID` (this is the "ids only" companion
  * query referenced on line 4461).
+ * Variable types must match the Orders Core schema too (Quiqdash-v3
+ * `app/graphql/schema.graphql`): cursors are `Cursor` and `orderBy` is
+ * `OrderOrder`. Declaring `String` / `OrderByInput` made every call fail
+ * with 422 GRAPHQL_VALIDATION_FAILED (sc-34635).
  */
-const ORDERS_LISTING_IDS_QUERY = `query ordersListingIds($first: Int, $last: Int, $after: String, $before: String, $where: OrderWhereInput, $orderBy: OrderByInput) {
+const ORDERS_LISTING_IDS_QUERY = `query ordersListingIds($first: Int, $last: Int, $after: Cursor, $before: Cursor, $where: OrderWhereInput, $orderBy: OrderOrder) {
   orders(first: $first, last: $last, after: $after, before: $before, where: $where, orderBy: $orderBy) {
     edges { node { clientOrderID } }
     pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
@@ -164,8 +169,8 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     "different surface entirely. " +
     "Filter (`where`) is OrderWhereInput passthrough. Observed keys: stateIn " +
     "(string[]), sourceIn (string[]), clientOrderIDIn (number[]), " +
-    "partnerOrderIDIn (string[]), brandNameIn (string[]), submittedAtBetween " +
-    "({from, to} ISO-8601), scheduledForBetween ({from, to} ISO-8601), search. " +
+    "partnerOrderIDIn (string[]), brandNameIn (string[]), submittedAtGTE / " +
+    "submittedAtLTE (ISO-8601), scheduledForGTE / scheduledForLTE (ISO-8601). " +
     "Pagination is cursor-based: pass `first` + `after` for forward, `last` + " +
     "`before` for backward. Page size capped at 500 to bound response size; " +
     "use `totalCount` to size subsequent calls. " +
@@ -177,9 +182,9 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
     "GraphQL spec §7.1) — inspect each entry's `message` and `path` for " +
     "field-level rejection detail. The tool surfaces both `data` and " +
     "`errors` in its output so partial failures are never silently dropped. " +
-    "Example: `{ \"where\": { \"stateIn\": [\"pending\", \"live\"], " +
-    "\"submittedAtBetween\": { \"from\": \"2026-05-01T00:00:00Z\", \"to\": " +
-    "\"2026-05-19T00:00:00Z\" } }, \"first\": 200, \"orderBy\": { \"field\": " +
+    "Example: `{ \"where\": { \"stateIn\": [\"pending\", \"delivery_complete\"], " +
+    "\"submittedAtGTE\": \"2026-05-01T00:00:00Z\", \"submittedAtLTE\": " +
+    "\"2026-05-19T00:00:00Z\" }, \"first\": 200, \"orderBy\": { \"field\": " +
     "\"SUBMITTED_AT\", \"direction\": \"DESC\" } }`.",
   inputSchema,
   outputSchema,

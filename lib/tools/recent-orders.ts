@@ -2,18 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { environmentField } from "@/lib/clients/quiqup-env";
 import { quiqupLastmileGet } from "@/lib/quiqup";
+import { ORDER_STATES } from "@/lib/order-states";
 
-// Quiqup last-mile order lifecycle, roughly chronological. `pending` is the
-// most useful default — "what's open right now" — because the other states
-// either represent terminal outcomes or live missions a PM rarely lists.
-const ORDER_STATES = [
-  "pending",
-  "live",
-  "in_progress",
-  "delivered",
-  "failed",
-  "cancelled",
-] as const;
+// `pending` stays the default ("what's open right now"). The state list
+// lives in lib/order-states.ts (sc-34635).
 
 // Only the fields we actually surface back. Quiqup's `/orders` response is
 // large (full origin/destination address blocks, items, products, tracking
@@ -62,7 +54,11 @@ export function registerRecentOrders(server: McpServer): void {
         state: z
           .enum(ORDER_STATES)
           .default("pending")
-          .describe("Order lifecycle state to filter by."),
+          .describe(
+            "Quiqup order state to filter by (the codes `list_quiqup_order_states` " +
+              "returns). Delivered orders are `delivery_complete`; failed " +
+              "deliveries are `delivery_failed`.",
+          ),
         from: z
           .string()
           .regex(/^\d{4}-\d{2}-\d{2}$/)

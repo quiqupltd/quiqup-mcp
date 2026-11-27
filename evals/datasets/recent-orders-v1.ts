@@ -11,7 +11,7 @@
  * scores would be unrepeatable.
  *
  * Tool-side reference (lib/tools/recent-orders.ts):
- *   state in {pending, live, in_progress, delivered, failed, cancelled} (default pending)
+ *   state: one of ORDER_STATES in lib/order-states.ts (default pending)
  *   from / to: YYYY-MM-DD (defaults: 7 days ago / today UTC)
  *   limit: 1..50 (default 5)
  */
@@ -55,12 +55,12 @@ export const items: RecentOrdersItem[] = [
   {
     input: {
       request:
-        "Show me the orders that failed in the last 3 days. Up to 10 of them.",
+        "Show me the orders whose delivery failed in the last 3 days. Up to 10 of them.",
     },
     expectedOutput: {
       tool: "recent_orders",
       args: {
-        state: "failed",
+        state: "delivery_failed",
         from: daysAgo(3),
         to: daysAgo(0),
         limit: 10,
@@ -74,7 +74,7 @@ export const items: RecentOrdersItem[] = [
     expectedOutput: {
       tool: "recent_orders",
       args: {
-        state: "delivered",
+        state: "delivery_complete",
         from: daysAgo(7),
         to: daysAgo(0),
         limit: 20,
@@ -96,12 +96,12 @@ export const items: RecentOrdersItem[] = [
   {
     input: {
       request:
-        "Give me everything in_progress from the last 14 days, up to 50 orders.",
+        "Give me everything out for delivery from the last 14 days, up to 50 orders.",
     },
     expectedOutput: {
       tool: "recent_orders",
       args: {
-        state: "in_progress",
+        state: "out_for_delivery",
         from: daysAgo(14),
         to: daysAgo(0),
         limit: 50,
@@ -110,12 +110,12 @@ export const items: RecentOrdersItem[] = [
   },
   {
     input: {
-      request: "Show live orders from the last 2 days. Limit 15.",
+      request: "Show orders sitting at the depot from the last 2 days. Limit 15.",
     },
     expectedOutput: {
       tool: "recent_orders",
       args: {
-        state: "live",
+        state: "at_depot",
         from: daysAgo(2),
         to: daysAgo(0),
         limit: 15,
