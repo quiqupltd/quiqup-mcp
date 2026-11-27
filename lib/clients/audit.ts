@@ -1,27 +1,19 @@
 /**
  * Typed client for the Quiqup Audit service at audit.quiqup.com.
  *
- * AUTH EXCEPTION — read carefully:
- *   This client deliberately sends NO Authorization header. The Audit service
- *   (source-doc §19 B line 4258) is described as "no auth header — public read
- *   or service-internal" on the Quiqdash frontend. From the MCP server's
- *   perspective the audit endpoint is service-internal: only authenticated
- *   MCP callers can reach it (Clerk gates the MCP transport in
- *   `app/[transport]/route.ts` via `withMcpAuth`), and the audit service
- *   trusts its network boundary. Adding a Bearer header here would not just
- *   be redundant — it would fail upstream because the Audit service does
- *   NOT speak Clerk session-JWTs.
+ * Auth model: V3b same-IdP exchange, IDENTICAL to quiqup-lastmile.ts and
+ * ex-core.ts. The handler resolves the caller's Clerk session JWT (the
+ * "default" template) via `getQuiqupReadyJwt` and this client forwards it as
+ * `Authorization: Bearer <jwt>`.
  *
- *   This is the SECOND non-Quiqup-auth client in the MCP server after
- *   Google Places (lib/clients/google-places.ts). The exception is locked
- *   in by tests/clients/audit.test.ts (asserts the outbound request has no
- *   Authorization header). Do NOT "fix" the missing Bearer header by
- *   mistake — see the same comment in lib/clients/google-places.ts for the
- *   precedent.
- *
- *   The Clerk gate on the MCP transport (route.ts withMcpAuth) is what
- *   keeps unauthenticated callers out. The Audit client itself is
- *   unauthenticated by design.
+ * This client used to send NO Authorization header, on the belief that Audit
+ * was "public read or service-internal" and "does not speak Clerk
+ * session-JWTs". Both were wrong: Audit verifies the same Clerk tokens as
+ * Quiqdash (clerk.quiqup.com), and from sc-30350 it requires them on every
+ * read, scoping merchants to their own account's events and showing Quiqup
+ * staff everything. A request without a valid token gets a 401, so do NOT
+ * remove the header. The only remaining auth exception in this project is
+ * google-places.ts.
  *
  * Error model: HTTP non-2xx maps to `AuditError` (status + raw body). A
  * separate error class — not `QuiqupHttpError` — because Audit is not a
@@ -30,6 +22,8 @@
  * want the unified `isError: true` envelope from the registerTool wrapper
  * can translate AuditError → QuiqupHttpError at the tool boundary (the
  * google-places.ts → lookup-google-place.ts handoff is the precedent).
+ * 401 = the token is missing or invalid; 403 = the user is neither Quiqup
+ * staff nor linked to an account.
  *
  * Endpoint shape (per source-doc §19 B lines 4258-4263):
  *   GET {AUDIT_BASE_URL}/events?resourceID.eq=<orderUuid>
@@ -76,13 +70,12 @@ export class AuditError extends Error {
 }
 
 export interface AuditClientOptions {
+  /** Caller's Clerk session JWT (from `getQuiqupReadyJwt`), forwarded as the Bearer token. */
+  jwt: string;
   /** Explicit base URL override (e.g. for tests). Wins over `environment`. */
   baseUrl?: string;
   /** Selects the cluster when `baseUrl` is not provided. Defaults to production. */
   environment?: QuiqupEnvironment;
-  // NOTE: no `jwt` field. The Audit service is no-auth by upstream design
-  // (see file header). Adding a JWT would be both useless and a structural
-  // violation of the auth-exception contract.
 }
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -92,7 +85,7 @@ export interface AuditRequestInit {
 }
 
 export class AuditClient {
-  constructor(private readonly opts: AuditClientOptions = {}) {}
+  constructor(private readonly opts: AuditClientOptions) {}
 
   /**
    * Issue a request against the Audit service. Query parameters are
@@ -102,8 +95,7 @@ export class AuditClient {
    *
    * Headers sent:
    *   - Accept: application/json
-   *   No other headers. Specifically: no auth-style header of any kind.
-   *   See the AUTH EXCEPTION block in the file header for why.
+   *   - Authorization: Bearer <caller's Clerk session JWT>
    */
   async request(
     method: HttpMethod,
@@ -122,6 +114,7 @@ export class AuditClient {
       method,
       headers: {
         Accept: "application/json",
+        Authorization: `Bearer ${this.opts.jwt}`,
       },
     });
 

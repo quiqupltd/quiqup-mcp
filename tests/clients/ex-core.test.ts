@@ -4,8 +4,7 @@
  * Covers the contract the client layer owns:
  *   1. Authorization header carries the Bearer JWT minted via the
  *      Clerk → Quiqup bridge. Ex-core sits behind the Quiqup gateway —
- *      it is NOT one of the two auth-exception clients (Audit + Google
- *      Places).
+ *      it is NOT the auth-exception client (that is Google Places).
  *   2. Binary base64 envelope for non-JSON responses — `{ contentType,
  *      base64 }` with `base64` round-tripping back to the input bytes.
  *      This is the canonical shape Phase 5 (PDFs), 7 (CSV), 10 (Zoho)
