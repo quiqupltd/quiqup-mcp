@@ -46,3 +46,30 @@ Live platform facts behind round 2: `GET /me` with a non-JWT bearer returns 500 
 
 - A pending draft passes the ownership probe or the fallback, and a real cancel returns 201 or 202 `pending_projection`.
 - `send_orders_for_collection` for real: not run on production, because it would put an order into a courier run.
+
+---
+
+# Live call log - sc-30350 (`list_order_audit_events` forwards the Clerk bearer)
+
+Repo rule (AGENTS.md): the tool now sends `Authorization: Bearer <jwt>` to `audit.staging.quiqup.com` / `audit.quiqup.com`, so it needs a live staging call through `POST /mcp` `tools/call` with a Clerk OAuth at+jwt for a userId with an active Quiqdash staging session.
+
+**Status: PENDING.** The agent preparing this PR has no Clerk session or staging client credentials, and does not mint, request or handle them. A human with a Quiqdash staging login runs the calls below and pastes the results here before merge.
+
+## Pre-check already run (no credentials)
+
+| Call | Result |
+|---|---|
+| Anonymous `GET https://audit.staging.quiqup.com/events?resourceID.eq=00000000-0000-4000-8000-000000000000`, 27 Nov 2026 | 200 `{"page":1,"total_count":0,...,"content":[]}` in 0.9 s: staging audit is still in `log` mode (audit#14 not live yet), so an anonymous read still passes there. |
+
+## Calls to run (internal staging tenants only)
+
+Local build of this branch (`bun run dev`), Claude/MCP Inspector connected to `http://localhost:3000/mcp` through Clerk OAuth as an internal staging user. Order UUIDs from `get_lastmile_order` / `bulk_orders_lookup` on staging.
+
+| # | Caller | Call | Expected |
+|---|---|---|---|
+| 1 | Quiqup staff user | `list_order_audit_events {order_uuid: <staging order>, environment: "staging"}` | 200, non-empty `events` |
+| 2 | Merchant user (internal test account) | own order | 200, that order's events |
+| 3 | Same merchant user | another account's order | 200, empty `events` (once audit enforces) |
+| 4 | Audit logs for calls 1-3 | `auth would reject` absent for these requests | no anonymous-caller log lines from this tool |
+
+Record verbatim request and response per call (mask ids beyond 4 digits, no customer fields), date, acting user and the audit `AUTH_ENFORCE` mode at the time.

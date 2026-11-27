@@ -20,7 +20,7 @@
 import { z } from "zod";
 import type { ToolSpec } from "./register";
 import { AuditClient } from "@/lib/clients/audit";
-import { getQuiqupReadyJwt } from "@/lib/quiqup";
+import { jwtFor } from "@/lib/caller-auth";
 import { environmentField } from "@/lib/clients/quiqup-env";
 
 const inputSchema = z.object({
@@ -77,7 +77,11 @@ export const spec: ToolSpec<typeof inputSchema, typeof outputSchema> = {
 
     // Same V3b same-IdP exchange as the other Quiqup-side tools: Audit
     // verifies the Clerk "default" template token that Quiqdash sends too.
-    const jwt = await getQuiqupReadyJwt(auth.userId);
+    // jwtFor is the one place tools resolve their upstream JWT (see
+    // lib/caller-auth.ts); for a Clerk caller it is getQuiqupReadyJwt.
+    // NOTE: this tool is not on the /agent/mcp allowlist. Audit verifies
+    // Clerk tokens only, so a platform-token caller would get a 401 there.
+    const jwt = await jwtFor(auth, args.environment);
     const client = new AuditClient({ jwt, environment: args.environment });
 
     // Dotted query-key (resourceID.eq) per source-doc §19 B line 4259.
