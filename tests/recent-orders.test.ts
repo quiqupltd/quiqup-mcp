@@ -175,18 +175,75 @@ describe("recent_orders", () => {
       registerRecentOrders(makeFakeServer(captured) as never);
 
       await captured.handler!(
-        { state: "delivered", from: "2026-01-01", to: "2026-01-31", limit: 25 },
+        { state: "delivery_complete", from: "2026-01-01", to: "2026-01-31", limit: 25 },
         extraWithUser,
       );
 
       const [, query] = quiqupLastmileGetMock.mock.calls[0];
       expect(query).toMatchObject({
-        "filters[state]": "delivered",
+        "filters[state]": "delivery_complete",
         from: "2026-01-01",
         to: "2026-01-31",
         per_page: 25,
         page: 1,
       });
+    });
+  });
+
+  // sc-34635: the state enum used to offer `delivered`, `failed`,
+  // `in_progress` and `live`, none of which are Quiqup order states, so the
+  // upstream matched nothing. The accepted values must be exactly the codes
+  // `list_quiqup_order_states` returns (GET /quiqup/orders/states).
+  describe("state values (sc-34635)", () => {
+    const REAL_STATES = [
+      "pending",
+      "ready_for_collection",
+      "picking_started",
+      "out_for_collection",
+      "out_for_return",
+      "at_depot",
+      "received_at_depot",
+      "in_transit",
+      "out_for_delivery",
+      "collection_failed",
+      "on_hold",
+      "scheduled",
+      "return_to_origin",
+      "returned_to_origin",
+      "cancelled",
+      "collected",
+      "delivery_complete",
+      "delivery_failed",
+    ];
+
+    async function stateSchema() {
+      const { registerRecentOrders } = await import(
+        "../lib/tools/recent-orders"
+      );
+      const captured: Captured = {};
+      registerRecentOrders(makeFakeServer(captured) as never);
+      return captured.meta!.inputSchema!.state as {
+        safeParse: (v: unknown) => { success: boolean; data?: unknown };
+      };
+    }
+
+    it("accepts every real Quiqup order state", async () => {
+      const state = await stateSchema();
+      for (const s of REAL_STATES) {
+        expect(state.safeParse(s).success, s).toBe(true);
+      }
+    });
+
+    it("rejects the invented names that matched nothing upstream", async () => {
+      const state = await stateSchema();
+      for (const s of ["delivered", "failed", "in_progress", "live"]) {
+        expect(state.safeParse(s).success, s).toBe(false);
+      }
+    });
+
+    it("still defaults to pending", async () => {
+      const state = await stateSchema();
+      expect(state.safeParse(undefined).data).toBe("pending");
     });
   });
 

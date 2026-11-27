@@ -115,6 +115,47 @@ describe("lookup_orders_ids", () => {
     expect(text).toContain('"clientOrderID": 1');
   });
 
+  // sc-34635: Orders Core rejected the query with 422 GRAPHQL_VALIDATION_FAILED
+  // because it declared `$after/$before: String` and `$orderBy: OrderByInput`.
+  // The schema types are `Cursor` and `OrderOrder` (Quiqdash-v3
+  // app/graphql/schema.graphql, `orders(... orderBy: OrderOrder)`).
+  it("declares the Orders Core variable types Cursor and OrderOrder (sc-34635)", async () => {
+    let captured: { query: string } | null = null;
+    server.use(
+      http.post(ORDERS_GRAPH, async ({ request }) => {
+        captured = (await request.json()) as { query: string };
+        return HttpResponse.json({
+          data: { orders: { edges: [], pageInfo: {}, totalCount: 0 } },
+        });
+      }),
+    );
+
+    const mod = await import("../../lib/tools/lookup-orders-ids");
+    await mod.spec.handler(auth, {
+      where: { stateIn: ["delivery_complete"] },
+      first: 5,
+      environment: "production",
+    });
+
+    const q = (captured as unknown as { query: string }).query;
+    expect(q).toMatch(/\$after: Cursor\b/);
+    expect(q).toMatch(/\$before: Cursor\b/);
+    expect(q).toMatch(/\$orderBy: OrderOrder\b/);
+    expect(q).not.toContain("OrderByInput");
+    expect(q).not.toMatch(/\$after: String/);
+  });
+
+  // sc-34635: OrderWhereInput has submittedAtGTE/LTE, not submittedAtBetween,
+  // scheduledForBetween or search. The description is what the model copies,
+  // so naming keys Orders Core rejects recreates the 422.
+  it("describes only OrderWhereInput keys Orders Core accepts (sc-34635)", async () => {
+    const mod = await import("../../lib/tools/lookup-orders-ids");
+    const d = mod.spec.description;
+    expect(d).not.toMatch(/Between/);
+    expect(d).toContain("submittedAtGTE");
+    expect(d).not.toMatch(/"live"|\\"live\\"/);
+  });
+
   it("forwards where + first + orderBy as GraphQL variables (not in query string)", async () => {
     let captured: { query: unknown; variables: unknown } | null = null;
     server.use(

@@ -100,7 +100,7 @@ export const items: OrdersGraphqlItem[] = [
         first: 100,
         after: "YXJyYXljb25uZWN0aW9uOjEwMA==",
         where: {
-          stateIn: ["delivered"],
+          stateIn: ["delivery_complete"],
         },
       },
     },
@@ -115,10 +115,8 @@ export const items: OrdersGraphqlItem[] = [
       args: {
         where: {
           sourceIn: ["shopify"],
-          submittedAtBetween: {
-            from: "2026-05-01T00:00:00Z",
-            to: "2026-05-19T00:00:00Z",
-          },
+          submittedAtGTE: "2026-05-01T00:00:00Z",
+          submittedAtLTE: "2026-05-19T00:00:00Z",
         },
       },
     },

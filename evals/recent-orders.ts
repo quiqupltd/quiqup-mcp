@@ -51,6 +51,7 @@ const { AnthropicInstrumentation } = await import(
 const Anthropic = (await import("@anthropic-ai/sdk")).default;
 
 const { evaluators } = await import("./score-recent-orders");
+const { ORDER_STATES } = await import("../lib/order-states");
 
 import type { ExperimentTask } from "@langfuse/client";
 
@@ -83,15 +84,9 @@ const tool = {
     properties: {
       state: {
         type: "string",
-        enum: [
-          "pending",
-          "live",
-          "in_progress",
-          "delivered",
-          "failed",
-          "cancelled",
-        ],
-        description: "Order lifecycle state to filter by. Default: pending.",
+        enum: [...ORDER_STATES],
+        description:
+          "Quiqup order state to filter by. Delivered orders are delivery_complete; failed deliveries are delivery_failed. Default: pending.",
       },
       from: {
         type: "string",
